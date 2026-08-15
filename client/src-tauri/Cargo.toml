@@ -1,0 +1,47 @@
+[package]
+name = "harbor-app"
+version = "0.1.0"
+description = "Harbor — your digital safe harbor. A desktop presence app for couples."
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-store = "2"
+tauri-plugin-window-state = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Real app-icon extraction (Feature 4): PNG encode + base64 of the extracted
+# HICON. Non-Windows compiles still link them but never call them.
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# OS-wide idle detection via GetLastInputInfo (Windows 11 target).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    # Feature 4: real app icons — SHGetFileInfoW (Shell) + HICON→RGBA (Gdi).
+    # `SHGetFileInfoW` is gated on Win32_Storage_FileSystem (it takes a
+    # FILE_FLAGS_AND_ATTRIBUTES) in the windows 0.58 split-feature layout.
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+] }
+
+[features]
+# Used by the Tauri CLI for production builds (custom protocol).
+custom-protocol = ["tauri/custom-protocol"]

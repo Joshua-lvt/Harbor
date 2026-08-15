@@ -1,0 +1,45 @@
+import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import WidgetScreen from "./features/widget/WidgetScreen";
+import NotificationOverlay from "./features/notif-overlay/NotificationOverlay";
+import { ToastProvider } from "./components/Toaster";
+import { loadSettings } from "./lib/identity";
+import { applyTheme, systemPrefersDark } from "./lib/theme";
+import "./style.css";
+
+// The widget + the notification overlay are SECOND Tauri windows loading the
+// same bundle at `#/widget` / `#/notif-overlay`. They must NOT mount App — App's
+// boot effect opens a socket with this device's id, and the relay only allows
+// one live socket per device (a second would evict the main window's). So each
+// gets its own minimal root that never touches the socket, store, tray, or
+// notifications — the overlay listens for `harbor-notification` events pushed by
+// the main window (see services/notifOverlay.ts), exactly like the widget.
+const hash = typeof window !== "undefined" ? window.location.hash : "";
+const isWidget = hash.startsWith("#/widget");
+const isNotifOverlay = hash.startsWith("#/notif-overlay");
+
+// Paint an initial theme before React mounts to avoid a light flash on a dark
+// OS. The main window refines to the saved setting once the store loads; the
+// widget has no store permission, so it starts from the OS preference and the
+// first `harbor-widget-state` event corrects it (WidgetScreen applies snap.dark).
+applyTheme(systemPrefersDark() ? "dark" : "light");
+if (!isWidget && !isNotifOverlay) {
+  void loadSettings()
+    .then((s) => applyTheme(s.theme))
+    .catch(() => {});
+}
+
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    {isWidget ? (
+      <WidgetScreen />
+    ) : isNotifOverlay ? (
+      <NotificationOverlay />
+    ) : (
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    )}
+  </React.StrictMode>,
+);
