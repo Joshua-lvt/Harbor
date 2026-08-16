@@ -38,6 +38,15 @@ harbor.db.*
 .dev.vars
 .dev.vars.*
 
+# Updater signing keypair (Fase 2 mandatory auto-update). Generated locally
+# with `tauri signer generate`. The PRIVATE key (.tauri/harbor.key + its
+# password) is NEVER committed — it lives only in GitHub Secrets
+# (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) and signs the .exe in CI. The PUBLIC
+# half is embedded in client/src-tauri/tauri.conf.json (plugins.updater.pubkey),
+# which IS committed, so exclude the whole .tauri/ directory to avoid ever
+# leaking the private half.
+/.tauri/
+
 # ----------------------------------------------------------------------------
 # Test-only second client (com.harbor.appb) — local two-client smoke only.
 # NOT shipped; never version the whole client-b tree.
@@ -61,6 +70,7 @@ harbor.db.*
 
 # Personal dev plan docs (randomly-named planning scratch)
 /partitioned-wibbling-wilkinson.md
+/rosy-meandering-treehouse.md
 
 # ----------------------------------------------------------------------------
 # Backups directory (local data zips)

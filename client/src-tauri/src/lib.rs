@@ -135,6 +135,13 @@ pub fn run() {
                 .add_migrations("sqlite:harbor.db", local_migrations())
                 .build(),
         )
+        // Mandatory auto-update (Fase 2). The updater plugin handles the signed
+        // check / download / install; the process plugin exposes relaunch().
+        // The frontend's `UpdateGate` drives the whole flow (see
+        // client/src/features/update/UpdateGate.tsx) — nothing here touches the
+        // E2E / pairing / socket / identity layer.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| {
             // Close-to-tray on the main window: hide instead of quitting so
             // presence stays online while the app runs in the background.

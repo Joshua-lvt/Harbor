@@ -1,1 +1,48 @@
-{"$schema":"https://schema.tauri.app/config/2","productName":"Harbor","version":"0.1.0","identifier":"com.harbor.app","build":{"beforeDevCommand":"npm run dev","beforeBuildCommand":"npm run build","devUrl":"http://localhost:1420","frontendDist":"../dist"},"app":{"withGlobalTauri":false,"windows":[{"label":"main","title":"Harbor","url":"index.html","width":920,"height":620,"minWidth":820,"minHeight":560,"resizable":true,"center":true}],"security":{"csp":null}},"bundle":{"active":true,"targets":["nsis"],"icon":["icons/32x32.png","icons/128x128.png","icons/icon.ico"]}}
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Harbor",
+  "version": "1.0.0",
+  "identifier": "com.harbor.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harbor",
+        "url": "index.html",
+        "width": 920,
+        "height": 620,
+        "minWidth": 820,
+        "minHeight": 560,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Joshua-lvt/Harbor/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc4NzBGMkE0NjZDRDVGMEYKUldRUFg4MW1wUEp3ZUNYUUpva3JkRGpHM3pkQWp6QU92ZXFiSDlTNTNYTzRtUlhzbVRERTRkUjkK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

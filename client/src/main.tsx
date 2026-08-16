@@ -6,6 +6,7 @@ import NotificationOverlay from "./features/notif-overlay/NotificationOverlay";
 import { ToastProvider } from "./components/Toaster";
 import { loadSettings } from "./lib/identity";
 import { applyTheme, systemPrefersDark } from "./lib/theme";
+import UpdateGate from "./features/update/UpdateGate";
 import "./style.css";
 
 // The widget + the notification overlay are SECOND Tauri windows loading the
@@ -15,6 +16,12 @@ import "./style.css";
 // gets its own minimal root that never touches the socket, store, tray, or
 // notifications — the overlay listens for `harbor-notification` events pushed by
 // the main window (see services/notifOverlay.ts), exactly like the widget.
+//
+// The MAIN window wraps <App/> in <UpdateGate> (Fase 2): the gate runs a signed
+// check() before letting App mount, so in any non-up-to-date state there is NO
+// socket, no loadIdentity, no relay traffic at all. The widget/overlay are not
+// gated — they own no socket/store and so can't bypass the block from a side
+// window (see UpdateGate.tsx for the exact state table).
 const hash = typeof window !== "undefined" ? window.location.hash : "";
 const isWidget = hash.startsWith("#/widget");
 const isNotifOverlay = hash.startsWith("#/notif-overlay");
@@ -38,7 +45,9 @@ createRoot(document.getElementById("root")!).render(
       <NotificationOverlay />
     ) : (
       <ToastProvider>
-        <App />
+        <UpdateGate>
+          <App />
+        </UpdateGate>
       </ToastProvider>
     )}
   </React.StrictMode>,

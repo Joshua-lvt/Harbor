@@ -1,6 +1,6 @@
 [package]
 name = "harbor-app"
-version = "0.1.0"
+version = "1.0.0"
 description = "Harbor — your digital safe harbor. A desktop presence app for couples."
 edition = "2021"
 rust-version = "1.77"
@@ -19,6 +19,11 @@ tauri-plugin-autostart = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-store = "2"
 tauri-plugin-window-state = "2"
+# Mandatory auto-update (Fase 2). `updater` does the signed check + download +
+# install; `process` exposes relaunch() so the frontend can restart into the
+# new build after install. Both stay independent of the E2E/pairing layer.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Real app-icon extraction (Feature 4): PNG encode + base64 of the extracted
