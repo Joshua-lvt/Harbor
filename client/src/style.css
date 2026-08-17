@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+/* Dark mode by CLASS (not media) so the user can toggle it independent of the
+   OS. The `dark:` variant compiles to `:where(.dark, .dark *)`, so any
+   `dark:*` utility and any token overridden under `.dark` activates the moment
+   `.dark` lands on <html>. `applyTheme` (lib/theme.ts) owns that class. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Harbor visual identity — ocean / pastel blue, minimal, Windows 11 vibe.
+   Slogan: "Harbor — Seu porto seguro digital." */
+@theme {
+  --color-harbor-mist: #f7fafc; /* soft white */
+  --color-harbor-sky: #bee3f8; /* light blue */
+  --color-harbor-ice: #90cdf4; /* ocean */
+  --color-harbor-sea: #63b3ed; /* primary */
+  --color-harbor-deep: #2b6cb0; /* deep blue */
+  --color-harbor-ink: #1a365d; /* near-black text on light */
+  --color-harbor-bg: #f8fbff; /* main app background (top of ocean gradient) */
+  --color-harbor-bg2: #eef4ff; /* secondary background (bottom of gradient) */
+  --color-harbor-sidebar: #1e3a5f; /* dark sidebar */
+  --color-harbor-sec: #64748b; /* secondary text */
+  --color-harbor-card-border: #d6e6ff; /* info-card border */
+  /* Frosted-glass surfaces (cards / inputs today written as bg-white/70../90).
+     The separator "line" replaces the soft border-harbor-sky/60 hairlines. */
+  --color-harbor-surface: #ffffff;
+  --color-harbor-surface-strong: #f5f9ff;
+  --color-harbor-line: #cfe4fb;
+
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+  --radius-xl2: 1.25rem;
+}
+
+/* Dark theme token overrides — only the tokens that genuinely flip redefined
+   here; the brand hues (sky/ice/sea/deep) and the sidebar stay the same in
+   both themes. Utilities reference these via var(--color-harbor-*) and pick up
+   the dark value automatically wherever `.dark` is an ancestor. */
+.dark {
+  --color-harbor-bg: #0b1220; /* ocean-dark top of gradient */
+  --color-harbor-bg2: #0e1626; /* ocean-dark bottom of gradient */
+  --color-harbor-ink: #e6edf6; /* light text on dark */
+  --color-harbor-sec: #8aa0bd; /* muted text on dark */
+  --color-harbor-mist: #0f1623; /* body background */
+  --color-harbor-card-border: #243049;
+  --color-harbor-surface: #16212f;
+  --color-harbor-surface-strong: #1b293a;
+  --color-harbor-line: #243049;
+}
+
+/* Personalização (feature tab) — the custom palette is written inline on <html>
+   by lib/customization.ts:applyCustomization (one `setProperty` per token), so
+   these classes only carry the two boolean toggles. Inline style outranks the
+   `@theme` :root + `.dark` rules above, so the 5 overridden tokens (sea/deep/
+   ink/bg/bg2) — and every opacity variant compiled to `color-mix(… var(…))` —
+   restyle automatically, no per-utility edits. */
+
+/* "solid" background: hide the OceanBackground bubbles/waves so the flat bg/bg2
+   gradient reads cleanly. Tagged on the decorative divs (.ocean-decor). */
+html.bg-solid .ocean-decor { display: none; }
+
+/* Mascote toggle: hide the harbor shark where it's main-app chrome (Sidebar
+   brand, Avatar fallback, Chat empty state). In-feature marketing (Pairing,
+   Settings footer) is NOT tagged — the toggle is about persistent chrome. */
+html.hide-mascot .harbor-mascot { display: none !important; }
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-harbor-ink);
+  background: var(--color-harbor-mist);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* The main window is an opaque soft card — Harbor is a normal app window now.
+   In dark mode the gradient tokens flip above, so this reads as a dark ocean. */
+.window-main {
+  background: linear-gradient(180deg, var(--color-harbor-bg) 0%, var(--color-harbor-bg2) 100%);
+}
+
+/* Presence dots — same colours in both themes (read on dark sidebar / light bg).
+   Kept as fixed hues (not tokens) deliberately. */
+.dot-online {
+  background: #48bb78;
+  box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.18);
+}
+.dot-away {
+  background: #ecc94b;
+  box-shadow: 0 0 0 3px rgba(236, 201, 75, 0.18);
+}
+.dot-offline {
+  background: #a0aec0;
+  box-shadow: 0 0 0 3px rgba(160, 174, 192, 0.18);
+}
+
+/* Thin, discreet scrollbars to match the minimalist feel. The thumb track
+   darkens under .dark so it stays legible on the ocean-dark background. */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(43, 108, 176, 0.25);
+  border-radius: 999px;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: rgba(144, 205, 244, 0.22);
+}
+
+/* Animations — ocean, soft. Chat bubbles pop in, typing dots pulse, the
+   reconnect banner breathes. More keyframes (toaster, mic) arrive in later
+   phases. */
+@keyframes bubblePop {
+  from { opacity: 0; transform: scale(0.94) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes typingDot {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+@keyframes reconnectPulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+.bubble-enter { animation: bubblePop 0.2s ease-out; }
+.reconnect-pulse { animation: reconnectPulse 1.4s ease-in-out infinite; }
+
+/* In-app toaster (ocean themed) */
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateX(120%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.toast-enter { animation: toastSlideIn 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Feature 5 — the notification overlay card. Harbor quick-messages are NOT
+   small corner toasts: the message LANDS on the partner's screen big and
+   unmissable, so the overlay window is large + centered and the card scales
+   in with a gentle pop. The window is frameless + transparent, so the card is
+   the whole visible surface. */
+@keyframes notifPopIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.notif-enter { animation: notifPopIn 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Giant centered card — solid, readable surface (no blur so the huge text stays
+   crisp over any desktop). */
+.notif-card {
+  background: rgba(255, 255, 255, 0.96);
+}
+.dark .notif-card {
+  background: rgba(22, 33, 47, 0.96);
+  border: 1px solid var(--color-harbor-card-border);
+}
+
+/* The message itself — scale down on short windows so it never overflows the
+   card. The overlay window is 500px tall; keep the text comfortably inside. */
+.notif-message { font-size: clamp(2.25rem, 6vw, 3rem); }
+
+@media (prefers-reduced-motion: reduce) {
+  .notif-enter { animation: none; }
+}
+
+/* Push-to-Talk: the call pill gently pulses while you're speaking, so it's */
+/* obvious the mic is hot without staring at a meter. */
+@keyframes pttPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 179, 237, 0); }
+  50%      { box-shadow: 0 0 0 4px rgba(99, 179, 237, 0.35); }
+}
+.ptt-pulse { animation: pttPulse 1.1s ease-in-out infinite; }
+
+/* Speaking ring for the call-panel avatars (Discord-style "who's talking"):
+   a blue ring that breathes around whoever's mic is hot. Box-shadow ONLY (no
+   `ring` utility) so it doesn't fight Tailwind's own `--tw-ring-*` box-shadow —
+   the keyframe owns the whole shadow, giving a clean animated glow halo. */
+@keyframes speakingRing {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.75); }
+  50%      { box-shadow: 0 0 0 6px rgba(99, 179, 237, 0.30), 0 0 16px 3px rgba(99, 179, 237, 0.35); }
+}
+.speaking-ring { animation: speakingRing 1s ease-in-out infinite; }
+
+/* Large call-panel orbs (56px) — a bigger, brighter speaking glow so the
+   indicator stays obvious on a large avatar + reads well in dark mode. A
+   gentle parent `speaking-pulse` (on CallStrip, not Avatar) nudges the whole
+   orb so motion-impaired attention still catches who's talking. */
+@keyframes speakingRingLg {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(99, 179, 237, .85), 0 0 12px 2px rgba(99, 179, 237, .4); }
+  50%      { box-shadow: 0 0 0 8px rgba(99, 179, 237, .40), 0 0 24px 6px rgba(99, 179, 237, .45); }
+}
+.speaking-ring-lg { animation: speakingRingLg .9s ease-in-out infinite; }
+@keyframes avatarPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+.speaking-pulse { animation: avatarPulse .9s ease-in-out infinite; }
+
+/* Dark mode: brighter (lighter-blue) rings so the speaking glow stays visible
+   on the dark ocean background (the default ring is tuned for light bg). */
+.dark .speaking-ring    { box-shadow: 0 0 0 3px rgba(144, 205, 244, .85), 0 0 14px 4px rgba(144, 205, 244, .4); }
+.dark .speaking-ring-lg { box-shadow: 0 0 0 4px rgba(144, 205, 244, .90), 0 0 18px 6px rgba(144, 205, 244, .45); }
+
+@media (prefers-reduced-motion: reduce) {
+  .speaking-ring { animation: none; box-shadow: 0 0 0 4px rgba(99, 179, 237, 0.6); }
+  .speaking-ring-lg { animation: none; box-shadow: 0 0 0 5px rgba(99, 179, 237, 0.7); }
+  .speaking-pulse { animation: none; }
+}
+
+/* Mascot idle float — a gentle vertical bob so the partner shark feels alive. */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%      { transform: translateY(-4px); }
+}
+.shark-float { animation: float 4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .shark-float { animation: none; }
+}

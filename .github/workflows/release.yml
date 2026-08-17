@@ -1,0 +1,117 @@
+# Harbor — release + signed mandatory auto-update artifacts (Fase 2).
+#
+# Triggers:
+#   - `git push origin v*`    → cut a public GitHub Release with the signed NSIS
+#     installer, its .sig sidecar, and the `latest.json` updater manifest.
+#   - `workflow_dispatch`      → retrigger the same build for a given tag by hand
+#     (e.g. to re-publish a corrupt/missing release asset without re-tagging).
+#
+# Windows-only: Harbor targets Windows 11. The NSIS installer it produces is the
+# only bundle the updater consumes (`targets: ["nsis"]` + `updaterJsonPreferNsis`
+# in tauri.conf.json, and `updaterJsonPreferNsis: true` below).
+#
+# Signing: the private half of the keypair generated with `tauri signer generate`
+# (`.tauri/harbor.key`, local + gitignored) is pasted into GitHub Secrets as
+# TAURI_SIGNING_PRIVATE_KEY (+ ..._PASSWORD). The action signs the .exe with it
+# during `cargo tauri build`; the public half is embedded in tauri.conf.json
+# (`plugins.updater.pubkey`) so the installed app validates the .sig before
+# installing. NO keys are committed to this repo or hardcoded in the YAML.
+#
+# Versioning: `tauri.conf.json` is the updater's source of truth, but the same
+# version must exist in `Cargo.toml` and `client/package.json` — the consistency
+# step below fails the build if any of the three diverge, so a release always
+# carries one real version. Bump = edit all three + tag `vX.Y.Z`.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# `tauri-action` creates the release + uploads assets, so it needs write access
+# to repo contents. `workflow_dispatch` still respects this; restrict the
+# permission to contents only (least privilege).
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    # Run only on the tag itself — guards against workflow_dispatch from a
+    # non-tagged ref accidentally producing an unversioned release.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Version consistency guard — the single real version lives in three files
+      # (tauri.conf.json, Cargo.toml, client/package.json). The updater compares
+      # the app version (read from tauri.conf.json) against latest.json, so a
+      # mismatch produces a silently-wrong update gate. Fail loudly here instead.
+      - name: Fail if the version diverges across the three sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # tauri.conf.json is JSONC (comments), Cargo.toml is TOML — neither is
+          # safe to `require()` with Node, so extract the version line by key.
+          # `"version"` appears once at the top level of tauri.conf.json; tooling
+          # adds no second one. package.json is plain JSON → safe to require().
+          V_CONF=$(grep -m1 -E '"version"' client/src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          V_CARGO=$(grep -m1 -E '^version' client/src-tauri/Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          V_NPM=$(node -p "require('./client/package.json').version")
+          echo "tauri.conf.json = $V_CONF"
+          echo "Cargo.toml     = $V_CARGO"
+          echo "package.json    = $V_NPM"
+          if [ "$V_CONF" != "$V_CARGO" ] || [ "$V_CONF" != "$V_NPM" ]; then
+            echo "::error::Version mismatch across tauri.conf.json / Cargo.toml / package.json — bump all three before tagging."
+            exit 1
+          fi
+          echo "Version consistent: $V_CONF"
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: client
+
+      - name: Build + sign + release (tauri-action)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Private key + password for signing the .exe (Fase 2). The installer
+          # is signature-validated against the pubkey embedded in tauri.conf.json
+          # before the client ever installs it. These are GitHub repo secrets the
+          # owner adds manually (see repo README / release steps) — never committed.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Production relay URL, baked into the frontend at build time (Vite
+          # statically substitutes VITE_* keys — see client/src/lib/types.ts
+          # DEFAULT_RELAY_URL). Without this, a CI build falls back to
+          # `ws://localhost:8787` and ships an app that can't reach its relay.
+          # This is a deploy fact (the Worker URL), NOT a secret — the Workers
+          # endpoint is public and forwards only opaque ciphertext — so it is fine
+          # to hardcode it here. Bump this only if the Worker is redeployed under
+          # a new name.
+          VITE_RELAY_URL: wss://harbor-cloud.josuelima10459510.workers.dev
+        with:
+          # The client lives under client/ (not the repo root), so the action
+          # must run cargo + npm there.
+          projectPath: client
+          # Use the triggering tag as the release tag (the only versioning
+          # source on the push path). On workflow_dispatch this is the ref's tag.
+          tagName: ${{ github.ref_name }}
+          releaseName: "Harbor ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          # Emit + upload `latest.json` (the updater manifest) as a release
+          # asset; prefer the NSIS bundle when multiple targets exist.
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true

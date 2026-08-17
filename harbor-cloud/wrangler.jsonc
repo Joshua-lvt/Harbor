@@ -1,0 +1,63 @@
+/**
+ * Harbor Cloudflare Worker configuration.
+ *
+ * Uses the CURRENT declarative `exports` field to declare two SQLite-backed Durable
+ * Object classes. `exports` is mutually exclusive with the legacy `migrations` array —
+ * this scaffold is not yet deployed, so we use the modern form cleanly (no prod namespace
+ * to migrate). See https://developers.cloudflare.com/workers/wrangler/configuration/.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "harbor-cloud",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-12",
+	"exports": {
+		"HarborRegistry": {
+			"type": "durable-object",
+			"storage": "sqlite"
+		},
+		"HarborPair": {
+			"type": "durable-object",
+			"storage": "sqlite"
+		},
+		// Tombstone: retires an orphaned Durable Object namespace left by the
+		// Cloudflare DO scaffold template (class `MyDurableObject`, provisioned
+		// namespace b19f121f08aa4e4fb5af7024626318e2) that predates HarborRegistry /
+		// HarborPair. `exports` reconciliation refused the first deploy until the
+		// orphan was declared `deleted` (Cloudflare's own suggested remediation).
+		// This permanently retires that namespace; it is NOT Harbor's data.
+		"MyDurableObject": {
+			"type": "durable-object",
+			"state": "deleted"
+		}
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "HARBOR_REGISTRY",
+				"class_name": "HarborRegistry"
+			},
+			{
+				"name": "HARBOR_PAIR",
+				"class_name": "HarborPair"
+			}
+		]
+	},
+	"vars": {
+		// Outbox (buffered offline chat) row TTL in days — matches FastAPI's
+		// HARBOR_OFFLINE_MSG_TTL_DAYS=7. Swept by the HarborPair alarm, replacing
+		// FastAPI's startup-only sweep (server/app/db.py:sweep_outbox).
+		"HARBOR_OFFLINE_MSG_TTL_DAYS": "7",
+		// Grace window before a transient drop is pushed as `offline` to the
+		// partner. Faithful to the prompt's REGRA ("don't spam offline on flaky
+		// networks"); FastAPI pushed offline instantly on disconnect.
+		"HARBOR_OFFLINE_GRACE_MS": "30000",
+		// Largest inbound WS frame we accept (256 KB). Oversized frames are rejected
+		// without dropping the socket (util.ts:DEFAULT_MAX_FRAME_BYTES).
+		"HARBOR_MAX_FRAME_BYTES": "262144"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true
+}
