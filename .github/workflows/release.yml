@@ -90,7 +90,7 @@ jobs:
         working-directory: client
 
       - name: Build + sign + release (tauri-action)
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v1.8.3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Private key + password for signing the .exe (Fase 2). The installer
@@ -122,6 +122,10 @@ jobs:
           # asset; prefer the NSIS bundle when multiple targets exist.
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
+          # Build only the installer consumed by the mandatory updater. This
+          # avoids the action trying to discover unrelated MSI artifacts after
+          # the Tauri CLI has already produced the signed NSIS bundle.
+          args: --bundles nsis
 
   build-linux-and-extend-manifest:
     needs: build-and-release
