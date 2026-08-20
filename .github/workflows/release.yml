@@ -89,10 +89,9 @@ jobs:
         run: npm ci
         working-directory: client
 
-      - name: Build + sign + release (tauri-action)
-        uses: tauri-apps/tauri-action@v1.8.3
+      - name: Build Windows NSIS bundle
+        working-directory: client
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Private key + password for signing the .exe (Fase 2). The installer
           # is signature-validated against the pubkey embedded in tauri.conf.json
           # before the client ever installs it. These are GitHub repo secrets the
@@ -108,24 +107,46 @@ jobs:
           # to hardcode it here. Bump this only if the Worker is redeployed under
           # a new name.
           VITE_RELAY_URL: wss://harbor-cloud.josuelima10459510.workers.dev
-        with:
-          # The client lives under client/ (not the repo root), so the action
-          # must run cargo + npm there.
-          projectPath: client
-          # Use the triggering tag as the release tag (the only versioning
-          # source on the push path). On workflow_dispatch this is the ref's tag.
-          tagName: ${{ github.ref_name }}
-          releaseName: "Harbor ${{ github.ref_name }}"
-          releaseDraft: false
-          prerelease: false
-          # Emit + upload `latest.json` (the updater manifest) as a release
-          # asset; prefer the NSIS bundle when multiple targets exist.
-          uploadUpdaterJson: true
-          updaterJsonPreferNsis: true
-          # Build only the installer consumed by the mandatory updater. This
-          # avoids the action trying to discover unrelated MSI artifacts after
-          # the Tauri CLI has already produced the signed NSIS bundle.
-          args: --bundles nsis
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Create or update GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ github.ref_name }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "${{ github.ref_name }}" --title "Harbor ${{ github.ref_name }}" --generate-notes
+          }
+
+      - name: Upload Windows artifacts and updater manifest
+        shell: pwsh
+        working-directory: client
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $bundle = Join-Path $PWD "src-tauri/target/release/bundle/nsis"
+          $setup = Get-ChildItem $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if ($null -eq $setup) { throw "NSIS setup.exe not found in $bundle" }
+          $signature = Get-Item "$($setup.FullName).sig"
+          if (-not (Test-Path $signature.FullName)) { throw "NSIS signature not found" }
+
+          gh release upload "${{ github.ref_name }}" $setup.FullName $signature.FullName --clobber
+
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $signatureText = (Get-Content $signature.FullName -Raw).Trim()
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($setup.Name)"
+          $manifest = [ordered]@{
+            version = $version
+            notes = ""
+            pub_date = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{ signature = $signatureText; url = $assetUrl }
+              "windows-x86_64-nsis" = [ordered]@{ signature = $signatureText; url = $assetUrl }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content latest.json
+          gh release upload "${{ github.ref_name }}" "$PWD/latest.json" --clobber
 
   build-linux-and-extend-manifest:
     needs: build-and-release
