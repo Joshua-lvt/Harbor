@@ -28,6 +28,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to build and publish"
+        required: true
+        default: "v1.0.2"
 
 # `tauri-action` creates the release + uploads assets, so it needs write access
 # to repo contents. `workflow_dispatch` still respects this; restrict the
@@ -38,6 +43,8 @@ permissions:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     # Run only on the tag itself — guards against workflow_dispatch from a
     # non-tagged ref accidentally producing an unversioned release.
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -114,9 +121,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${{ github.ref_name }}" *> $null
+          gh release view "$env:RELEASE_TAG" *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "${{ github.ref_name }}" --title "Harbor ${{ github.ref_name }}" --generate-notes
+            gh release create "$env:RELEASE_TAG" --title "Harbor $env:RELEASE_TAG" --generate-notes
           }
 
       - name: Upload Windows artifacts and updater manifest
@@ -131,11 +138,11 @@ jobs:
           $signature = Get-Item "$($setup.FullName).sig"
           if (-not (Test-Path $signature.FullName)) { throw "NSIS signature not found" }
 
-          gh release upload "${{ github.ref_name }}" $setup.FullName $signature.FullName --clobber
+          gh release upload "$env:RELEASE_TAG" $setup.FullName $signature.FullName --clobber
 
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $signatureText = (Get-Content $signature.FullName -Raw).Trim()
-          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($setup.Name)"
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/$($setup.Name)"
           $manifest = [ordered]@{
             version = $version
             notes = ""
@@ -146,11 +153,13 @@ jobs:
             }
           }
           $manifest | ConvertTo-Json -Depth 8 | Set-Content latest.json
-          gh release upload "${{ github.ref_name }}" "$PWD/latest.json" --clobber
+          gh release upload "$env:RELEASE_TAG" "$PWD/latest.json" --clobber
 
   build-linux-and-extend-manifest:
     needs: build-and-release
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
     steps:
@@ -194,7 +203,7 @@ jobs:
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
           test -n "$APPIMAGE"
           test -s "$APPIMAGE.sig"
-          gh release upload "${{ github.ref_name }}" "$APPIMAGE" "$APPIMAGE.sig" --clobber
+          gh release upload "$RELEASE_TAG" "$APPIMAGE" "$APPIMAGE.sig" --clobber
 
       - name: Add Linux platform to updater manifest
         env:
@@ -204,9 +213,9 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           APPIMAGE_NAME="Harbor_${VERSION}_amd64.AppImage"
-          APPIMAGE_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${APPIMAGE_NAME}"
+          APPIMAGE_URL="https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/${APPIMAGE_NAME}"
           curl --fail --silent --show-error --location \
-            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json" \
+            "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/latest.json" \
             -o latest.json
           APPIMAGE_SIG=$(cat "src-tauri/target/release/bundle/appimage/${APPIMAGE_NAME}.sig")
           jq --arg url "$APPIMAGE_URL" --arg sig "$APPIMAGE_SIG" \
@@ -214,4 +223,4 @@ jobs:
             latest.json > latest.json.tmp
           mv latest.json.tmp latest.json
           jq -e '.platforms["linux-x86_64"].url and .platforms["linux-x86_64"].signature' latest.json >/dev/null
-          gh release upload "${{ github.ref_name }}" latest.json --clobber
+          gh release upload "$RELEASE_TAG" latest.json --clobber
