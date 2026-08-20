@@ -292,7 +292,7 @@ A versão mais recente do Harbor está disponível nos **GitHub Releases**.
 
 ### [⬇️ Baixar Harbor](https://github.com/Joshua-lvt/Harbor/releases)
 
-Atualmente, o Harbor possui suporte para **Windows 11**.
+Atualmente, o Harbor possui suporte para **Windows 11** e **Linux**.
 
 ---
 
