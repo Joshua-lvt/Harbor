@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Harbor",
+  "version": "1.0.2",
+  "identifier": "com.harbor.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harbor",
+        "url": "index.html",
+        "width": 920,
+        "height": 620,
+        "minWidth": 820,
+        "minHeight": 560,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/512x512.png",
+      "icons/icon.svg"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1",
+          "libgtk-3-0",
+          "libwebkit2gtk-4.1-0",
+          "xdg-utils",
+          "libssl3",
+          "libappindicator3-1"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Joshua-lvt/Harbor/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk5QzhCN0I2NDM0MkNBQkEKUldTNnlrSkR0cmZJbVFJaXdXSWtNbWpSc0U1UzhJcUdEN2tUOXl6TE9DVS9vckFGbWRxWGNMZEIK",
+      "linux": {
+        "installMode": "dialog"
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "harbor-app"
-version = "1.0.1"
+version = "1.0.2"
 description = "Harbor — your digital safe harbor. A desktop presence app for couples."
 edition = "2021"
 rust-version = "1.77"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
@@ -46,6 +46,13 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2.21" }
+zbus = { version = "4", features = ["blocking"] }
+libc = "0.2"
+libappindicator = { version = "0.9.0", features = ["default"] }
+libappindicator-sys = { version = "0.9.0" }
 
 [features]
 # Used by the Tauri CLI for production builds (custom protocol).

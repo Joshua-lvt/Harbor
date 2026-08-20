@@ -1,0 +1,15 @@
+{
+    "$schema":  "../gen/schemas/linux-schema.json",
+    "identifier":  "notif-overlay",
+    "description":  "Capabilities for the always-on-top notification overlay window (label: notif-overlay). Minimal: drag it around, close it, focus it, and listen for harbor-notification events from the main window. No store, no sql, no socket — the overlay holds no persistent state and receives each notification as a global Tauri event. It emits harbor-navigate (main window focuses + routes to chat) and harbor-notif-dismiss (main window drops the card from the queue slot rotation).",
+    "windows":  [
+                    "notif-overlay"
+                ],
+    "permissions":  [
+                        "core:default",
+                        "core:window:allow-start-dragging",
+                        "core:window:allow-close",
+                        "core:window:allow-set-focus",
+                        "core:event:default"
+                    ]
+}

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Harbor
+GenericName=Presence App for Couples
+Comment=Your digital safe harbor — stay connected with your partner
+Exec=harbor
+Icon=com.harbor.app
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=presence;couples;chat;messaging;partner;
+StartupNotify=true
+StartupWMClass=harbor
+MimeType=x-scheme-handler/harbor;

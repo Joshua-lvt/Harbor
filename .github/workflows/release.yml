@@ -6,9 +6,9 @@
 #   - `workflow_dispatch`      → retrigger the same build for a given tag by hand
 #     (e.g. to re-publish a corrupt/missing release asset without re-tagging).
 #
-# Windows-only: Harbor targets Windows 11. The NSIS installer it produces is the
-# only bundle the updater consumes (`targets: ["nsis"]` + `updaterJsonPreferNsis`
-# in tauri.conf.json, and `updaterJsonPreferNsis: true` below).
+# The Windows job publishes the NSIS installer and creates the initial updater
+# manifest. The Linux job then adds the signed AppImage and merges the
+# `linux-x86_64` platform entry into that same manifest.
 #
 # Signing: the private half of the keypair generated with `tauri signer generate`
 # (`.tauri/harbor.key`, local + gitignored) is pasted into GitHub Secrets as
@@ -54,10 +54,9 @@ jobs:
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Version consistency guard — the single real version lives in three files
-      # (tauri.conf.json, Cargo.toml, client/package.json). The updater compares
-      # the app version (read from tauri.conf.json) against latest.json, so a
-      # mismatch produces a silently-wrong update gate. Fail loudly here instead.
+      # Version consistency guard — Windows and Linux must publish the same
+      # release version. The updater compares the app version against
+      # latest.json, so a mismatch produces a silently-wrong update gate.
       - name: Fail if the version diverges across the three sources
         shell: bash
         run: |
@@ -69,11 +68,19 @@ jobs:
           V_CONF=$(grep -m1 -E '"version"' client/src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           V_CARGO=$(grep -m1 -E '^version' client/src-tauri/Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
           V_NPM=$(node -p "require('./client/package.json').version")
+          V_LINUX_CONF=$(grep -m1 -E '"version"' linux/src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          V_LINUX_CARGO=$(grep -m1 -E '^version' linux/src-tauri/Cargo.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          V_LINUX_NPM=$(node -p "require('./linux/package.json').version")
           echo "tauri.conf.json = $V_CONF"
           echo "Cargo.toml     = $V_CARGO"
           echo "package.json    = $V_NPM"
-          if [ "$V_CONF" != "$V_CARGO" ] || [ "$V_CONF" != "$V_NPM" ]; then
-            echo "::error::Version mismatch across tauri.conf.json / Cargo.toml / package.json — bump all three before tagging."
+          echo "linux tauri.conf.json = $V_LINUX_CONF"
+          echo "linux Cargo.toml       = $V_LINUX_CARGO"
+          echo "linux package.json     = $V_LINUX_NPM"
+          if [ "$V_CONF" != "$V_CARGO" ] || [ "$V_CONF" != "$V_NPM" ] || \
+             [ "$V_CONF" != "$V_LINUX_CONF" ] || [ "$V_CONF" != "$V_LINUX_CARGO" ] || \
+             [ "$V_CONF" != "$V_LINUX_NPM" ]; then
+            echo "::error::Version mismatch across Windows/Linux manifests — bump every version source before tagging."
             exit 1
           fi
           echo "Version consistent: $V_CONF"
@@ -115,3 +122,71 @@ jobs:
           # asset; prefer the NSIS bundle when multiple targets exist.
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
+
+  build-linux-and-extend-manifest:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Linux client dependencies
+        working-directory: linux
+        run: npm ci
+
+      - name: Build and sign Linux AppImage
+        working-directory: linux
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_RELAY_URL: wss://harbor-cloud.josuelima10459510.workers.dev
+        run: |
+          npm exec tauri build -- --bundles appimage
+
+      - name: Upload Linux assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: linux
+        run: |
+          set -euo pipefail
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
+          test -n "$APPIMAGE"
+          test -s "$APPIMAGE.sig"
+          gh release upload "${{ github.ref_name }}" "$APPIMAGE" "$APPIMAGE.sig" --clobber
+
+      - name: Add Linux platform to updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: linux
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          APPIMAGE_NAME="Harbor_${VERSION}_amd64.AppImage"
+          APPIMAGE_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${APPIMAGE_NAME}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/latest.json" \
+            -o latest.json
+          APPIMAGE_SIG=$(cat "src-tauri/target/release/bundle/appimage/${APPIMAGE_NAME}.sig")
+          jq --arg url "$APPIMAGE_URL" --arg sig "$APPIMAGE_SIG" \
+            '.platforms["linux-x86_64"] = {"signature": $sig, "url": $url}' \
+            latest.json > latest.json.tmp
+          mv latest.json.tmp latest.json
+          jq -e '.platforms["linux-x86_64"].url and .platforms["linux-x86_64"].signature' latest.json >/dev/null
+          gh release upload "${{ github.ref_name }}" latest.json --clobber

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Harbor icon: anchor shape with ocean colors -->
+  <defs>
+    <linearGradient id="seaGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2B6CB0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1A4D8C;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="deepGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1A4D8C;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0F2D5A;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="124" fill="url(#seaGradient)" />
+
+  <!-- Anchor shape -->
+  <g transform="translate(128, 128)">
+    <!-- Anchor ring (top) -->
+    <ellipse cx="0" cy="-50" rx="24" ry="18" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" />
+
+    <!-- Anchor shank (vertical line) -->
+    <path d="M 0 -32 L 0 40" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" />
+
+    <!-- Anchor arms (crossbar) -->
+    <path d="M -36 28 L 36 28" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" />
+
+    <!-- Anchor flukes (bottom curves) -->
+    <path d="M -36 28 Q -50 45 -36 60" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" />
+    <path d="M 36 28 Q 50 45 36 60" fill="none" stroke="white" stroke-width="8" stroke-linecap="round" />
+  </g>
+
+  <!-- Subtle highlight ring -->
+  <circle cx="128" cy="128" r="120" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="2" />
+</svg>

@@ -1,20 +1,23 @@
 //! Real app-icon extraction (Feature 4).
 //!
-//! `get_app_icon(exe_path)` extracts the Windows executable's icon, resizes it
+//! `get_app_icon(exe_path)` extracts the application's icon, resizes it
 //! to 48×48, encodes it as a PNG, and returns it as a base64 `data:image/png`
 //! URL so the frontend can cache + send it once per exe over the WS
-//! (`activity_icon`). Graceful degradation: returns `None` on any failure or on
-//! non-Windows targets — the frontend then shows a `GeneratedAppIcon` fallback.
+//! (`activity_icon`). On Windows, we use the Win32 API to extract the icon
+//! from the executable. On Linux, we try to look up the icon in the current
+//! icon theme using `xdg-icon-resource`. On other platforms, or if icon
+//! extraction fails, we return `None` — the frontend then shows a
+//! `GeneratedAppIcon` fallback.
 //!
-//! The extraction path is the classic Win32 idiom:
-//!   `SHGetFileInfoW(SHGFI_ICON | SHGFI_LARGEICON)` → HICON
-//!   → `GetIconInfo` → HBITMAP color bitmap (DIB section)
-//!   → `GetDIBits` → raw BGRA pixels
-//!   → `image` crate decode of those pixels → resize → PNG → base64.
+//! Privacy: we only ever read the icon of an executable that the user's OWN
+//! machine is running — never the window title or any screen content. The
+//! icon crosses the wire once per new exe so the partner renders the real
+//! program icon.
 //!
-//! Privacy: we only ever read the icon of an EXE that the user's OWN machine is
-//! running — never the window title or any screen content. The icon crosses the
-//! wire once per new exe so the partner renders the real program icon.
+//! On Linux, icon lookup depends on the `xdg-icon-resource` command (from
+//! xdg-utils) being available and the icon being present in the current
+//! icon theme. If the command fails or the icon is not found, we fall back
+//! to the generated icon.
 //!
 //! NOTE on the `windows` crate version (0.58): GDI/Shell calls return a mix of
 //! `Result<T>` and primitive `BOOL`/`i32`. We handle each defensively so a
@@ -22,6 +25,7 @@
 //! non-blocking from the frontend's point of view.
 
 use serde::Serialize;
+use base64::Engine;
 
 /// The foreground app, returned to the frontend. `exe` is the lowercased
 /// basename (e.g. "code.exe") used as the activity key + icon cache key; `path`
@@ -34,14 +38,18 @@ pub struct ForegroundApp {
 }
 
 /// Extract the icon for an exe PATH, returning a base64 `data:image/png` URL
-/// (48×48). `None` on non-Windows or any extraction failure (→ generated fallback).
+/// (48×48). `None` on extraction failure (→ generated fallback).
 #[tauri::command]
 pub fn get_app_icon(exe_path: String) -> Option<String> {
     #[cfg(windows)]
     {
         icon_windows(&exe_path)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        icon_linux(&exe_path)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = exe_path;
         None
@@ -231,4 +239,75 @@ fn rgb_to_png_data_url(
     let bytes = out.into_inner();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:image/png;base64,{}", b64))
+}
+
+#[cfg(target_os = "linux")]
+fn icon_linux(exe_path: &str) -> Option<String> {
+    use std::process::Command;
+    use std::ffi::OsStr;
+
+    // Extract the application name from the executable path
+    // e.g., "/usr/bin/code" -> "code"
+    let app_name = std::path::Path::new(exe_path)
+        .file_name()
+        .and_then(OsStr::to_str)?
+        .to_string();
+
+    // Try to find the icon using xdg-icon-resource
+    // We look for a 48x48 icon first, then fall back to any size
+    let output = Command::new("xdg-icon-resource")
+        .arg("lookup")
+        .arg("--size")
+        .arg("48")
+        .arg(&app_name)
+        .output();
+
+    let icon_path = match output {
+        Ok(out) if out.status.success() => {
+            // Convert the output path to a string, removing any trailing newline
+            String::from_utf8(out.stdout).ok()?.trim().to_string()
+        }
+        _ => {
+            // Fallback: try without specifying size
+            let output = Command::new("xdg-icon-resource")
+                .arg("lookup")
+                .arg(&app_name)
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    String::from_utf8(out.stdout).ok()?.trim().to_string()
+                }
+                _ => return None,
+            }
+        }
+    };
+
+    // Check if the file exists and is readable
+    if std::path::Path::new(&icon_path).exists() {
+        // Read the image file and convert to base64 PNG
+        match std::fs::read(&icon_path) {
+            Ok(image_data) => {
+                // Try to load the image with the image crate to ensure it's valid
+                // and re-encode as PNG to normalize the format
+                match image::load_from_memory(&image_data) {
+                    Ok(img) => {
+                        // Convert to RGBA8 if needed
+                        let rgba_img = img.to_rgba8();
+                        // Encode as PNG
+                        let mut png_data = Vec::new();
+                        if rgba_img.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png).is_ok() {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
+                            Some(format!("data:image/png;base64,{}", b64))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
 }
