@@ -41,6 +41,9 @@ export default function SettingsScreen({
   const [unpairErr, setUnpairErr] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarErr, setAvatarErr] = useState("");
+  // The relay URL is hidden by default — it's an advanced/private setting the
+  // user doesn't want shown. Revealed only via the "Avançado" toggle.
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const avatarInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -262,15 +265,27 @@ export default function SettingsScreen({
         </section>
 
         <section className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-harbor-deep/70">Relay (wss:// recomendado)</label>
-          <input
-            value={relayUrl}
-            onChange={(e) => setRelayUrl(e.target.value)}
-            className="rounded-xl border border-harbor-sky bg-harbor-surface-strong px-3 py-2 text-sm outline-none focus:border-harbor-sea"
-          />
-          <p className="text-[11px] text-harbor-ink/50">
-            Servidor privado seu e do seu parceiro — não é nosso. Use wss:// e TLS em qualquer rede que não seja local.
-          </p>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="flex items-center justify-between rounded-xl bg-harbor-surface/70 px-3 py-2 text-sm font-medium text-harbor-ink transition hover:bg-harbor-surface"
+          >
+            <span>Avançado</span>
+            <span className="text-xs text-harbor-ink/50">{showAdvanced ? "▲" : "▼"}</span>
+          </button>
+          {showAdvanced && (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-medium text-harbor-deep/70">Relay (wss:// recomendado)</label>
+              <input
+                value={relayUrl}
+                onChange={(e) => setRelayUrl(e.target.value)}
+                className="rounded-xl border border-harbor-sky bg-harbor-surface-strong px-3 py-2 text-sm outline-none focus:border-harbor-sea"
+              />
+              <p className="text-[11px] text-harbor-ink/50">
+                Servidor privado seu e do seu parceiro — não é nosso. Use wss:// e TLS em qualquer rede que não seja local.
+              </p>
+            </div>
+          )}
         </section>
 
         <section className="flex flex-col gap-2">

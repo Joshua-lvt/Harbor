@@ -142,3 +142,27 @@ coverage/
 Thumbs.db
 *.swp
 *.swo
+
+# ----------------------------------------------------------------------------
+# Local scratch / tooling (not part of the app)
+# ----------------------------------------------------------------------------
+# Agent tooling + project memory notes
+/.abacusai/
+/client/memory/
+/linux/memory/
+
+# Tauri config backups made during manual edits
+/tauri.conf.json.backup
+/tauri.conf.json.backup2
+/tauri.conf.json.backup3
+**/tauri.conf.json.backup
+**/tauri.conf.json.backup2
+**/tauri.conf.json.backup3
+
+# Machine-specific desktop launcher files at the repo root
+/com.harbor.app.desktop
+/com.harbor.app.png
+/harbor.desktop
+
+# Old linuxdeploy artifact
+/linuxdeploy-x86_64.AppImage.old

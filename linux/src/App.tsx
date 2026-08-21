@@ -17,6 +17,7 @@ import NotificationsScreen from "./features/notifications/NotificationsScreen";
 import PersonalizationScreen from "./features/personalization/PersonalizationScreen";
 import { applyCustomization, customizationOf } from "./lib/customization";
 import { ensureIdentity, loadIdentity, loadSettings, saveIdentity, saveSettings } from "./lib/identity";
+import { mergeRemoteSettings, syncSettingsToRemote } from "./lib/supabase";
 import { genKeypair } from "./lib/crypto";
 import { socket } from "./services/ws";
 import { attachNotifications } from "./services/notify";
@@ -70,6 +71,13 @@ export default function App() {
   const [id, setId] = useState<Identity | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  // Settings change handler: update local state AND best-effort push to
+  // Supabase (cross-device sync). Non-blocking — a Supabase failure is ignored
+  // and the app keeps working on local storage.
+  const handleSettingsChange = (next: Settings) => {
+    setSettings(next);
+    if (id?.device_id) syncSettingsToRemote(id.device_id, next);
+  };
   // Socket status drives the outbound-activity broadcaster (`useActivity`) so
   // my foreground app only sends when actually connected. App-lifetime state.
   const [connected, setConnected] = useState(socket.getStatus());
@@ -200,6 +208,12 @@ export default function App() {
       if (!cancelled) setSettings(s);
       const existing = await loadIdentity();
       if (cancelled) return;
+      // Best-effort: merge settings persisted in Supabase (cross-device sync).
+      // Non-blocking — if Supabase is unreachable/unconfigured, local wins.
+      if (existing?.device_id) {
+        const merged = await mergeRemoteSettings(existing.device_id, s);
+        if (!cancelled) setSettings(merged);
+      }
       if (existing?.partner_id && existing?.device_secret) {
         // Validate the link still exists server-side — the partner may have
         // unpaired us while we were offline. If /partner 404s, the link is
@@ -601,7 +615,7 @@ export default function App() {
     return () => off?.();
   }, []);
 
-  if (bootError) {
+    if (bootError) {
     return (
       <div className="window-main flex h-screen flex-col items-center justify-center px-6 text-center">
         <h1 className="text-2xl font-semibold" style={{ color: "var(--color-harbor-ink)" }}>
@@ -635,7 +649,7 @@ export default function App() {
     content = (
       <PersonalizationScreen
         settings={settings}
-        onSettings={setSettings}
+        onSettings={handleSettingsChange}
         back={() => (window.location.hash = "#/home")}
       />
     );
@@ -644,7 +658,7 @@ export default function App() {
       <SettingsScreen
         identity={id}
         settings={settings}
-        onSettings={setSettings}
+        onSettings={handleSettingsChange}
         onIdentity={setId}
         onUnpair={async () => {
           // Hit the relay FIRST (the partner is notified over their live WS),

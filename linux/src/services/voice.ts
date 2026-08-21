@@ -44,15 +44,39 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { socket } from "./ws";
+import { platformName } from "../lib/platform";
+import { recordCall, classifyTransport, type Transport } from "./callMetrics";
 import type { ServerEvent } from "../lib/types";
 
-const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+// ICE servers: public STUN for direct P2P path discovery, plus a TURN relay so
+// peers behind symmetric NAT can still connect (the "call nunca funcionou" on
+// different networks). TURN relays media through the server when a direct path
+// is impossible — the retry cap below stops any infinite reconnect loop.
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  {
+    // ExpressTURN free relay. Both UDP and TCP transports are offered so a
+    // restrictive network that blocks UDP can still relay over TCP.
+    urls: [
+      "turn:free.expressturn.com:3478?transport=udp",
+      "turn:free.expressturn.com:3478?transport=tcp",
+    ],
+    username: "000000002102610296",
+    credential: "SJ0HMDGW9K1ymBkdpIeiu7kOFqA=",
+  },
+];
 const VK_LMENU = 0xa4; // Left Alt — Push-to-Talk
 const PTT_POLL_MS = 120;
 /** Offerer re-offers on this cadence while waiting to connect. */
 const RECONNECT_RETRY_MS = 8_000;
 /** If negotiation doesn't reach `connected` in this window, tear down and retry. */
 const CONNECTING_TIMEOUT_MS = 20_000;
+/** Consecutive failed connect attempts before we give up and surface `failed`
+ *  (with a "Tentar novamente" button) instead of reconnecting forever — the
+ *  "conectando e reconectando infinitamente" bug. ~5 attempts ≈ 2-3 min. */
+const MAX_RETRIES = 5;
 
 export type VoiceStatus =
   | "needs_permission"
@@ -71,6 +95,10 @@ export interface VoiceState {
    *  AnalyserNode on the remote stream (see startSpeakingDetect). Stays false
    *  if the Web Audio analysis path is unavailable (honest degradation). */
   partnerSpeaking: boolean;
+  /** I am sharing my screen (a video track is on the PC). */
+  screenSharing: boolean;
+  /** The partner is sharing their screen (a remote video track is present). */
+  partnerScreenSharing: boolean;
   error: string | null;
 }
 
@@ -80,14 +108,31 @@ class VoiceManager {
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
+  /** My screen-share stream (getDisplayMedia). Its video track is added to the
+   *  same PC as the mic, so audio + screen share over ONE connection. */
+  private screenStream: MediaStream | null = null;
+  /** The partner's screen-share stream (a remote video track). */
+  private remoteVideoStream: MediaStream | null = null;
+  // --- call metrics (local diagnostics, see callMetrics.ts) ---------------
+  /** When the current connected call started (ms). Null when not connected. */
+  private callStartTs: number | null = null;
+  /** Transport of the current call (host/srflx/relay), from getStats. */
+  private callTransport: Transport = "unknown";
+  /** ICE reconnects during the current call. */
+  private callReconnects = 0;
+  /** Whether the current call ended due to a connection failure. */
+  private callFailed = false;
   private state: VoiceState = {
     status: "reconnecting",
     pttActive: false,
     partnerSpeaking: false,
+    screenSharing: false,
+    partnerScreenSharing: false,
     error: null,
   };
   private listeners = new Set<Listener>();
   private audioEls = new Set<HTMLAudioElement>();
+  private videoEls = new Set<HTMLVideoElement>();
   private pttTimer: number | null = null;
   // Partner-speaking analysis: an AudioContext + AnalyserNode tapping the
   // remote stream, polled for RMS. Null when not analysing (idle / failed, or
@@ -115,6 +160,25 @@ class VoiceManager {
   private connectingTimer: number | null = null;
   /** Unsubscribe handle for the socket-status subscription owned here. */
   private offStatus: (() => void) | null = null;
+  /** Consecutive failed connect attempts. Incremented each retry cycle; when it
+   *  exceeds MAX_RETRIES we surface `failed` instead of reconnecting forever.
+   *  Reset on a successful connect and on an explicit user retry. */
+  private retryCount = 0;
+  /** ICE candidates received before the remote description was set. Trickle-ICE
+   *  race: the offerer's candidates arrive at the responder while it's still
+   *  processing the offer (and vice-versa), and `addIceCandidate` throws until
+   *  `setRemoteDescription` has run — the old code dropped them, so the
+   *  responder never learned the offerer's candidates and the call could NEVER
+   *  connect (the "call nunca funcionou" bug). Buffered here and flushed right
+   *  after setRemoteDescription in onOffer/onAnswer. Cleared on teardown. */
+  private pendingIce: RTCIceCandidateInit[] = [];
+  /** Auto-grant: getUserMedia needs a user gesture, which the optimistic boot
+   *  path can't provide. Instead of forcing a dedicated "Permitir microfone"
+   *  button, we arm a one-time global listener that re-attempts the mic on the
+   *  FIRST click/keypress anywhere in the app — so the call comes up
+   *  automatically the moment the user interacts. Disarmed once granted. */
+  private autoGrantArmed = false;
+  private autoGrantCleanup: (() => void) | null = null;
 
   constructor() {
     // Wire signaling to the app-lifetime socket singleton. We never unsubscribe
@@ -142,6 +206,38 @@ class VoiceManager {
     } catch {
       // non-Tauri / window unavailable — no-op
     }
+    // Auto-grant the mic on the first user interaction (see armAutoGrant).
+    this.armAutoGrant();
+  }
+
+  /** Arm the one-time first-interaction mic grant. getUserMedia needs a user
+   *  gesture; the optimistic boot path can't provide one, so we wait for the
+   *  first click/keypress anywhere in the app and re-attempt then. This removes
+   *  the need for a dedicated "Permitir microfone" button — the call comes up
+   *  automatically the moment the user interacts. Disarmed once the mic is
+   *  granted (see ensureMic) or when the driver stops. */
+  private armAutoGrant(): void {
+    if (this.autoGrantArmed) return;
+    this.autoGrantArmed = true;
+    const attempt = () => {
+      if (this.state.status === "needs_permission" && this.running) {
+        void this.grantAndConnect();
+      }
+    };
+    const onDown = () => attempt();
+    const onKey = () => attempt();
+    window.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    this.autoGrantCleanup = () => {
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }
+
+  private disarmAutoGrant(): void {
+    this.autoGrantArmed = false;
+    this.autoGrantCleanup?.();
+    this.autoGrantCleanup = null;
   }
 
   /** Subscribe to state; returns unsubscribe. Runs the listener once immediately. */
@@ -181,18 +277,27 @@ class VoiceManager {
    *  is left in a stopped state; a later `startAlwaysOn` re-engages it. */
   stopAlwaysOn(): void {
     this.running = false;
+    this.disarmAutoGrant();
     if (this.offStatus) {
       this.offStatus();
       this.offStatus = null;
     }
     this.clearRetry();
     this.clearConnectingTimer();
+    this.stopScreenShare();
     this.teardownPC();
     this.releaseMic();
     // Stopped: distinct from reconnecting — no socket, no retry, no mic. The
     // listeners (CallStrip) keep a stale-but-harmless status until the next
     // startAlwaysOn; the screen that shows them is gone by then anyway.
-    this.set({ status: "reconnecting", pttActive: false, partnerSpeaking: false, error: null });
+    this.set({
+      status: "reconnecting",
+      pttActive: false,
+      partnerSpeaking: false,
+      screenSharing: false,
+      partnerScreenSharing: false,
+      error: null,
+    });
   }
 
   /** The one user gesture in the whole flow: the "Permitir microfone" /
@@ -204,6 +309,9 @@ class VoiceManager {
     const ok = await this.ensureMic(true);
     if (!ok) return; // ensureMic set the appropriate failed/needs_permission/mic_blocked state
     if (!this.running) return;
+    // An explicit user retry resets the failure counter so "Tentar novamente"
+    // genuinely re-attempts from scratch.
+    this.retryCount = 0;
     // Move to "reconnecting" BEFORE branching on role. connect() guards on
     // `status === "reconnecting"` — and on first run the status was
     // "needs_permission", so WITHOUT this the offerer's connect() early-returned
@@ -239,6 +347,140 @@ class VoiceManager {
     if (stream) void el.play().catch(() => {});
   }
 
+  /** Attach a remote <video> element to render the partner's screen share
+   *  (App/CallStrip renders it when `partnerScreenSharing` is true). */
+  attachVideoElement(el: HTMLVideoElement): () => void {
+    this.videoEls.add(el);
+    el.srcObject = this.remoteVideoStream;
+    if (this.remoteVideoStream) void el.play().catch(() => {});
+    return () => {
+      this.videoEls.delete(el);
+      el.srcObject = null;
+    };
+  }
+
+  // --- screen sharing ------------------------------------------------------
+
+  /** Start sharing my screen over the SAME peer connection as the mic (no
+   *  second connection). getDisplayMedia prompts the OS picker; the returned
+   *  video track is added to the PC. If the user stops sharing via the browser
+   *  UI, `track.onended` tears it down cleanly. Returns false if the user
+   *  cancelled the picker or the platform doesn't support it. */
+  async startScreenShare(): Promise<boolean> {
+    if (this.screenStream) return true; // already sharing
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch {
+      return false; // user cancelled the picker, or unsupported
+    }
+    this.screenStream = stream;
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach((t) => t.stop());
+      this.screenStream = null;
+      return false;
+    }
+    // If the user stops sharing via the OS/browser UI, clean up locally.
+    track.onended = () => this.stopScreenShare();
+    // Add the video track to the live PC (or it'll be added on the next
+    // createPC). Re-negotiation is implicit: adding a track triggers
+    // onnegotiationneeded → we re-offer.
+    if (this.pc) {
+      this.pc.addTrack(track, stream);
+      this.negotiate();
+    }
+    this.set({ screenSharing: true });
+    return true;
+  }
+
+  /** Stop sharing my screen: remove the video track from the PC and stop the
+   *  capture. Safe to call when not sharing. */
+  stopScreenShare(): void {
+    if (!this.screenStream) return;
+    const track = this.screenStream.getVideoTracks()[0];
+    if (track) {
+      track.onended = null;
+      track.stop();
+      if (this.pc) {
+        const sender = this.pc.getSenders().find((s) => s.track === track);
+        if (sender) this.pc.removeTrack(sender);
+      }
+    }
+    this.screenStream.getTracks().forEach((t) => t.stop());
+    this.screenStream = null;
+    this.set({ screenSharing: false });
+    // Removing a track triggers renegotiation so the partner drops the video.
+    this.negotiate();
+  }
+
+  /** Re-negotiate after adding/removing a track. The offerer re-offers; the
+   *  responder waits for the offerer's next offer (the offerer is the one who
+   *  typically shares, but either side can — the smaller-id offerer drives
+   *  negotiation). */
+  private negotiate(): void {
+    if (!this.pc || !this.running) return;
+    if (this.isOfferer) {
+      void (async () => {
+        try {
+          const offer = await this.pc!.createOffer();
+          await this.pc!.setLocalDescription(offer);
+          this.sendSignal("offer", offer);
+        } catch {
+          // ignore — the retry loop will re-offer
+        }
+      })();
+    }
+    // Responder: nothing to send; the offerer's next offer (triggered by their
+    // own track change) carries the renegotiation.
+  }
+
+  // --- call metrics --------------------------------------------------------
+
+  /** Determine the current transport (host/srflx/relay) from the selected ICE
+   *  candidate pair via getStats. Best-effort; falls back to the last known. */
+  private async detectTransport(): Promise<void> {
+    if (!this.pc) return;
+    try {
+      const stats = await this.pc.getStats();
+      let localCandidateType: string | undefined;
+      stats.forEach((s) => {
+        // The `selected`/`nominated`/`localCandidateId` fields aren't in older
+        // TS lib.dom, so read them through a loose record.
+        const r = s as unknown as Record<string, unknown>;
+        if (r.type === "candidate-pair" && (r.selected === true || r.nominated === true)) {
+          const localId = r.localCandidateId as string | undefined;
+          if (localId) {
+            const local = stats.get(localId) as unknown as Record<string, unknown> | undefined;
+            if (local && typeof local.candidateType === "string") {
+              localCandidateType = local.candidateType as string;
+            }
+          }
+        }
+      });
+      if (localCandidateType) this.callTransport = classifyTransport(localCandidateType);
+    } catch {
+      // getStats unavailable — keep the last known transport
+    }
+  }
+
+  /** Record the end of the current call (if one was in progress) into the local
+   *  metrics store. Called on teardown and on connection failure. */
+  private recordCallEnd(): void {
+    if (this.callStartTs === null) return;
+    const durationMs = Date.now() - this.callStartTs;
+    recordCall({
+      transport: this.callTransport,
+      durationMs,
+      failed: this.callFailed,
+      reconnects: this.callReconnects,
+    });
+    this.callStartTs = null;
+    this.callTransport = "unknown";
+    this.callReconnects = 0;
+    this.callFailed = false;
+  }
+
   // --- socket-status driver -------------------------------------------------
 
   private onSocket(s: "connecting" | "open" | "closed"): void {
@@ -262,6 +504,15 @@ class VoiceManager {
 
   private async onSocketOpen(): Promise<void> {
     if (!this.running) return;
+    // If the user hasn't granted the mic yet (or the OS is blocking it), DON'T
+    // re-trigger getUserMedia on every socket reconnect — that re-prompts the
+    // OS permission dialog repeatedly ("fica pedindo permissão ao microfone").
+    // The "Permitir microfone" / "Tentar novamente" button is the single
+    // gesture that re-attempts. Once granted, localStream is set and the
+    // optimistic path below resolves silently.
+    if (this.state.status === "needs_permission" || this.state.status === "mic_blocked") {
+      return;
+    }
     // Optimistically (re)acquire the mic. On a permission granted in a prior
     // session this resolves immediately (WebView2 keeps the grant); it's the
     // "no button on boot" path. On a fresh install it rejects with
@@ -286,7 +537,9 @@ class VoiceManager {
     if (this.state.status !== "reconnecting") return;
     if (this.pc) return;
     this.set({ status: "connecting", error: null, partnerSpeaking: false });
-    this.createPC();
+    // createPC returns false (and sets a clear failed state) if WebRTC is
+    // unavailable — don't proceed to a null PC.
+    if (!this.createPC()) return;
     this.startConnectingTimer();
     try {
       const offer = await this.pc!.createOffer();
@@ -326,10 +579,16 @@ class VoiceManager {
       return;
     }
     this.set({ status: "connecting", error: null, partnerSpeaking: false });
-    this.createPC();
+    // createPC returns false (and sets a clear failed state) if WebRTC is
+    // unavailable — don't proceed to a null PC.
+    if (!this.createPC()) return;
     this.startConnectingTimer();
     try {
       await this.pc!.setRemoteDescription(offer);
+      // Flush any ICE candidates that arrived while we were processing the
+      // offer (they were buffered in onIce) — without this the responder never
+      // learns the offerer's candidates and the call can't connect.
+      this.flushPendingIce();
       const answer = await this.pc!.createAnswer();
       await this.pc!.setLocalDescription(answer);
       this.sendSignal("answer", answer);
@@ -345,6 +604,9 @@ class VoiceManager {
     if (!this.pc || this.pc.signalingState !== "have-local-offer") return;
     try {
       await this.pc.setRemoteDescription(answer);
+      // Flush the responder's ICE candidates that arrived before the answer
+      // (buffered in onIce) so the offerer learns them too.
+      this.flushPendingIce();
     } catch {
       // stale/dupe — ignore
     }
@@ -352,6 +614,15 @@ class VoiceManager {
 
   private async onIce(candidate: RTCIceCandidateInit): Promise<void> {
     if (!this.pc) return;
+    // Trickle-ICE race: if the remote description isn't set yet, addIceCandidate
+    // throws and the candidate would be lost forever. Buffer it and flush once
+    // setRemoteDescription completes (see onOffer/onAnswer). This is what makes
+    // the call actually connect — without it the responder never learns the
+    // offerer's candidates.
+    if (!this.pc.remoteDescription) {
+      this.pendingIce.push(candidate);
+      return;
+    }
     try {
       await this.pc.addIceCandidate(candidate);
     } catch {
@@ -359,18 +630,64 @@ class VoiceManager {
     }
   }
 
+  /** Flush ICE candidates buffered before the remote description was set. */
+  private flushPendingIce(): void {
+    if (!this.pc) return;
+    const pending = this.pendingIce;
+    this.pendingIce = [];
+    for (const c of pending) {
+      try {
+        void this.pc.addIceCandidate(c);
+      } catch {
+        // ignore — a stale candidate is harmless
+      }
+    }
+  }
+
   // --- peer connection + PTT ------------------------------------------------
 
-  private createPC(): void {
+  private createPC(): boolean {
+    // WebRTC is OFF by default in WebKitGTK and only present if the build
+    // enables it (we enable it in lib.rs via set_enable_webrtc). If it's still
+    // missing, surface a clear state instead of throwing an unhandled rejection
+    // on boot ("Can't find variable: RTCPeerConnection").
+    if (typeof RTCPeerConnection === "undefined") {
+      this.set({
+        status: "failed",
+        error: "Voz não suportada neste sistema (WebRTC indisponível).",
+      });
+      return false;
+    }
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     // Add the local mic track (muted until PTT raises it).
     this.localStream?.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream!));
     this.setMicTracksEnabled(false);
+    // Add the screen-share video track if we're already sharing (e.g. a
+    // reconnect while sharing).
+    if (this.screenStream) {
+      this.screenStream.getVideoTracks().forEach((t) => pc.addTrack(t, this.screenStream!));
+    }
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) this.sendSignal("ice", ev.candidate);
     };
     pc.ontrack = (ev) => {
+      if (ev.track.kind === "video") {
+        // The partner's screen share arrived — render it and mark the state so
+        // the UI shows "partner is sharing". When they stop, the track ends.
+        this.remoteVideoStream = ev.streams[0] ?? new MediaStream([ev.track]);
+        this.videoEls.forEach((el) => {
+          el.srcObject = this.remoteVideoStream;
+          void el.play().catch(() => {});
+        });
+        this.set({ partnerScreenSharing: true });
+        ev.track.onended = () => {
+          this.remoteVideoStream = null;
+          this.videoEls.forEach((el) => (el.srcObject = null));
+          this.set({ partnerScreenSharing: false });
+        };
+        return;
+      }
       // The peer's audio stream arrived — play it, mark connected, and start
       // analysing it for the partner-speaking ring (Discord-style "who's
       // talking"). startSpeakingDetect degrades silently if Web Audio is
@@ -380,7 +697,13 @@ class VoiceManager {
       this.startSpeakingDetect(this.remoteStream);
       this.clearConnectingTimer();
       this.clearRetry();
+      // A successful connect resets the failure counter, so a later drop starts
+      // a fresh retry budget rather than inheriting the old one.
+      this.retryCount = 0;
       this.set({ status: "connected" });
+      // Start the call metrics session + detect the transport (P2P vs TURN).
+      if (this.callStartTs === null) this.callStartTs = Date.now();
+      void this.detectTransport();
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
@@ -388,6 +711,8 @@ class VoiceManager {
         // A failed connection can't carry audio, so the partner is by
         // definition not speaking anymore — reset the ring alongside the
         // reconnect, and tear down the PC so the retry builds a fresh one.
+        this.callFailed = true;
+        this.recordCallEnd();
         this.clearConnectingTimer();
         this.teardownPC();
         this.setPtt(false);
@@ -400,6 +725,8 @@ class VoiceManager {
         // Peer left (or the link dropped for good) — back to reconnecting; the
         // offerer's retry loop (or an inbound offer, on the responder) lifts us
         // back up without any user action.
+        this.callReconnects += 1;
+        this.recordCallEnd();
         this.teardownPC();
         this.setPtt(false);
         this.set({ status: "reconnecting", partnerSpeaking: false });
@@ -408,6 +735,7 @@ class VoiceManager {
     };
     this.pc = pc;
     this.startPTT();
+    return true;
   }
 
   /** Get the local mic, surfacing a clear error keyed to the failure mode.
@@ -429,6 +757,8 @@ class VoiceManager {
     if (this.localStream) return true;
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Mic granted — no more auto-grant needed.
+      this.disarmAutoGrant();
       return true;
     } catch (e) {
       const name = (e as DOMException)?.name;
@@ -444,7 +774,7 @@ class VoiceManager {
           // novamente".
           this.set({
             status: "mic_blocked",
-            error: "O Windows está bloqueando o microfone para o Harbor.",
+            error: `O ${platformName()} está bloqueando o microfone para o Harbor.`,
           });
         } else {
           // No user gesture on this boot yet, or the user declined. Recoverable
@@ -623,6 +953,17 @@ class VoiceManager {
         this.set({ status: "needs_permission" });
         return;
       }
+      // Cap the reconnect loop: after MAX_RETRIES consecutive failed cycles,
+      // surface `failed` (with a "Tentar novamente" button) instead of spinning
+      // forever. This is the "conectando e reconectando infinitamente" fix.
+      this.retryCount += 1;
+      if (this.retryCount > MAX_RETRIES) {
+        this.set({
+          status: "failed",
+          error: "Não foi possível conectar a call. Verifique a rede.",
+        });
+        return;
+      }
       if (this.isOfferer) this.connect();
       // Responder: nothing to send; just re-arm the wait. (An inbound offer is
       // the only thing that lifts a responder out of reconnecting.)
@@ -666,10 +1007,17 @@ class VoiceManager {
   private teardownPC(): void {
     this.stopPTT();
     this.stopSpeakingDetect();
+    // Close out any in-progress call metrics session (no-op if none).
+    this.recordCallEnd();
     this.pc?.close();
     this.pc = null;
     this.remoteStream = null;
+    this.remoteVideoStream = null;
+    // Drop stale buffered candidates — they belong to the torn-down PC.
+    this.pendingIce = [];
     this.audioEls.forEach((el) => (el.srcObject = null));
+    this.videoEls.forEach((el) => (el.srcObject = null));
+    this.set({ partnerScreenSharing: false });
   }
 
   /** Fully release the local mic (call on stopAlwaysOn — no partner, no need to

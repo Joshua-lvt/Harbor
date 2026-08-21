@@ -1,6 +1,6 @@
 [package]
 name = "harbor-app"
-version = "1.0.2"
+version = "1.0.3"
 description = "Harbor — your digital safe harbor. A desktop presence app for couples."
 edition = "2021"
 rust-version = "1.77"
@@ -53,6 +53,9 @@ zbus = { version = "4", features = ["blocking"] }
 libc = "0.2"
 libappindicator = { version = "0.9.0", features = ["default"] }
 libappindicator-sys = { version = "0.9.0" }
+# WebKitGTK media permission: auto-grant the microphone so getUserMedia isn't
+# denied by the default permission handler (the "call nunca funcionou" on Linux).
+webkit2gtk = "2.0"
 
 [features]
 # Used by the Tauri CLI for production builds (custom protocol).

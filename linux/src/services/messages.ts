@@ -26,12 +26,26 @@ import { openFrom } from "../lib/crypto";
 import { asMs, insertIncoming, markDelivered } from "../lib/localDb";
 import { notificationQueue } from "./notificationQueue";
 import { notify } from "./notify";
+import { notificationStore } from "./notificationStore";
 import { loadSettings } from "../lib/identity";
 import type { Identity, ServerEvent, StoredMessage } from "../lib/types";
 
 /** Tag prepended to a keyless quick-message so the receiver still routes it to
  *  the notification queue (mirrors useChat). */
 const PLAINTEXT_NOTIF_TAG = "harbor_notify:";
+
+/**
+ * Clock offset between the relay's wall clock and ours, in ms. The relay stamps
+ * every `chat` event with `ts` in SECONDS of ITS wall clock; our own outgoing
+ * messages are stamped with `Date.now()` (ms) of OUR clock. If the two clocks
+ * differ, a raw server `ts` would place received messages "in the past" (or
+ * future) relative to our own — the bug where messages arriving while the chat
+ * was closed sorted above/older than they should. We sample the offset from the
+ * first received message of a session and reuse it, so received timestamps are
+ * corrected to our clock while preserving the server's relative ordering (a
+ * burst of buffered messages keeps its spacing). Null = not yet sampled.
+ */
+let clockOffsetMs: number | null = null;
 
 // Placeholder bubbles for the receive-side decrypt-failure paths. An encrypted
 // message must NEVER be silently dropped — the user sees something arrived that
@@ -104,6 +118,8 @@ class MessageStore {
     this.devicePrivkey = null;
     this.devicePubkey = null;
     this.chatActive = false;
+    // A new pairing re-samples the clock offset on its first received message.
+    clockOffsetMs = null;
   }
 
   /** Mark whether the ChatScreen is currently mounted (the user is actively
@@ -163,6 +179,11 @@ class MessageStore {
 
   private async onChat(e: Extract<ServerEvent, { type: "chat" }>): Promise<void> {
     if (!this.partnerId) return; // stopped / not paired
+    // Sample the clock offset from the server's timestamp so received messages
+    // sort consistently with our local outgoing ones (see `clockOffsetMs`).
+    const serverMs = asMs(e.ts);
+    if (clockOffsetMs === null) clockOffsetMs = Date.now() - serverMs;
+    const createdAt = serverMs + clockOffsetMs;
     // The wire envelope is one of two mutually-exclusive shapes (see types.ts):
     // an opaque `enc` sealed-box string (E2E) or a plaintext `text` (+optional
     // `image`) for scripts / pre-E2E partners / a partner that hasn't published a
@@ -186,15 +207,24 @@ class MessageStore {
               preset_id?: unknown;
             };
             if (inner.kind === "harbor_notify") {
+              const quickText = typeof inner.text === "string" ? String(inner.text) : "";
               notificationQueue.enqueue({
                 id: e.id,
                 partnerName: this.partnerName,
                 partnerAvatar: this.partnerAvatar,
-                text: typeof inner.text === "string" ? String(inner.text) : "",
+                text: quickText,
                 presetId:
                   typeof inner.preset_id === "string" ? inner.preset_id : undefined,
-                timestamp: asMs(e.ts),
+                timestamp: createdAt,
                 repeatCount: 1,
+              });
+              // Record to the in-app Harbor notification history (Bug 4).
+              void notificationStore.add({
+                id: e.id,
+                kind: "quick",
+                title: this.partnerName,
+                body: quickText,
+                timestamp: createdAt,
               });
               return;
             }
@@ -216,15 +246,24 @@ class MessageStore {
           inner = {};
         }
         if (inner.kind === "harbor_notify") {
+          const quickText = typeof inner.text === "string" ? String(inner.text) : "";
           notificationQueue.enqueue({
             id: e.id,
             partnerName: this.partnerName,
             partnerAvatar: this.partnerAvatar,
-            text: typeof inner.text === "string" ? String(inner.text) : "",
+            text: quickText,
             presetId:
               typeof inner.preset_id === "string" ? inner.preset_id : undefined,
-            timestamp: asMs(e.ts),
+            timestamp: createdAt,
             repeatCount: 1,
+          });
+          // Record to the in-app Harbor notification history (Bug 4).
+          void notificationStore.add({
+            id: e.id,
+            kind: "quick",
+            title: this.partnerName,
+            body: quickText,
+            timestamp: createdAt,
           });
           return;
         }
@@ -234,16 +273,26 @@ class MessageStore {
     } else {
       return;
     }
-    // The relay stamps `ts` in SECONDS (time.time() / nowTs() = Date.now()/1000);
-    // unify to ms so it sorts and renders alongside our own outgoing messages
-    // (stamped with Date.now() in ms). See lib/localDb.ts:asMs.
-    const createdAt = asMs(e.ts);
+    // `createdAt` was computed at the top of onChat (server ts corrected by the
+    // sampled clock offset) so it sorts alongside our own outgoing messages.
     await insertIncoming(e.id, this.partnerId, text, createdAt, image);
-    // OS "Nova mensagem recebida" toast — fired HERE (post-decrypt) rather than
-    // in the raw `chat` subscriber so it never fires for Harbor quick-messages
-    // (those `return` above, routed to the notification queue + giant overlay
-    // long before this line). Suppressed while the ChatScreen is mounted: the
-    // user just saw the bubble land inline, so a system-tray ding is noise.
+    // Record to the in-app Harbor notification history (Bug 4) — always, so the
+    // Notifications tab shows every received message regardless of focus.
+    void notificationStore.add({
+      id: e.id,
+      kind: "message",
+      title: this.partnerName,
+      body: text,
+      timestamp: createdAt,
+    });
+    // "Nova mensagem recebida" — fired HERE (post-decrypt) rather than in the
+    // raw `chat` subscriber so it never fires for Harbor quick-messages (those
+    // `return` above, routed to the notification queue + giant overlay long
+    // before this line). Suppressed while the ChatScreen is mounted (the user
+    // just saw the bubble land inline). Always fires the OS notification when
+    // the toggle is on — the old document.hasFocus() gate showed an in-app
+    // toast instead when "focused", but on Linux a close-to-tray app reports
+    // focus even in the background, so the OS notification never fired.
     // Non-blocking: the user's toast arrives on its own.
     if (!this.chatActive) {
       void (async () => {

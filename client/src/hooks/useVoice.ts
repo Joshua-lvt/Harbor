@@ -17,8 +17,20 @@ export function useVoice(): VoiceState & {
    *  a failed state). Acquires the mic (now that there's a user gesture) and
    *  routes to the role — the offerer offers, the responder waits. */
   grantAndConnect: () => Promise<void>;
+  /** Start sharing my screen over the same PC as the mic. */
+  startScreenShare: () => Promise<boolean>;
+  /** Stop sharing my screen. */
+  stopScreenShare: () => void;
+  /** Attach a <video> element to render the partner's screen share. */
+  attachVideoElement: (el: HTMLVideoElement) => () => void;
 } {
   const [state, setState] = useState<VoiceState>(voice.getState());
   useEffect(() => voice.onState(setState), []);
-  return { ...state, grantAndConnect: () => voice.grantAndConnect() };
+  return {
+    ...state,
+    grantAndConnect: () => voice.grantAndConnect(),
+    startScreenShare: () => voice.startScreenShare(),
+    stopScreenShare: () => voice.stopScreenShare(),
+    attachVideoElement: (el) => voice.attachVideoElement(el),
+  };
 }

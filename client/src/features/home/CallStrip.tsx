@@ -26,10 +26,12 @@
  * subscription — cheap, the singleton is the single source of truth, and
  * VoiceStatusCard already subscribes the same way).
  */
-import { Mic, MicOff, PhoneCall, Volume2, AlertTriangle, RefreshCw, Settings as SettingsIcon } from "lucide-react";
+import { Mic, MicOff, PhoneCall, Volume2, AlertTriangle, RefreshCw, Settings as SettingsIcon, MonitorUp, MonitorX } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Avatar } from "../../components/Avatar";
 import { useVoice } from "../../hooks/useVoice";
+import { platformName } from "../../lib/platform";
 import type { Identity, PresenceState } from "../../lib/types";
 
 export function CallStrip({
@@ -39,7 +41,26 @@ export function CallStrip({
   identity: Identity;
   presence: PresenceState;
 }) {
-  const { status, pttActive, partnerSpeaking, error, grantAndConnect } = useVoice();
+  const {
+    status,
+    pttActive,
+    partnerSpeaking,
+    screenSharing,
+    partnerScreenSharing,
+    error,
+    grantAndConnect,
+    startScreenShare,
+    stopScreenShare,
+    attachVideoElement,
+  } = useVoice();
+  // Remote <video> element for the partner's screen share. Rendered only while
+  // `partnerScreenSharing`; attached to the voice singleton so the stream flows
+  // into it (and detaches on unmount).
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (!videoRef.current) return;
+    return attachVideoElement(videoRef.current);
+  }, [attachVideoElement]);
 
   const connected = status === "connected";
   const myName = identity.my_name?.trim() || "Você";
@@ -61,11 +82,11 @@ export function CallStrip({
     chip = "bg-harbor-sky/40 text-harbor-deep";
     actionable = true;
   } else if (status === "mic_blocked") {
-    statusText = "Microfone bloqueado pelo Windows";
+    statusText = `Microfone bloqueado pelo ${platformName()}`;
     icon = <MicOff className="h-4 w-4" />;
     chip = "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300";
     actionable = true; // "Tentar novamente" re-attempts grantAndConnect
-    needsSettingsAction = true; // "Abrir config" opens ms-settings:privacy-microphone
+    needsSettingsAction = true; // "Abrir config" opens the OS mic settings
   } else if (status === "connecting") {
     statusText = "Conectando…";
     icon = <PhoneCall className="h-4 w-4" />;
@@ -93,6 +114,7 @@ export function CallStrip({
     status === "failed" || status === "mic_blocked" ? "Tentar novamente" : "Permitir microfone";
 
   return (
+    <>
     <div className="flex items-center gap-4 rounded-2xl border border-harbor-card-border bg-harbor-surface/70 px-4 py-3 shadow-sm backdrop-blur transition">
       {/* The two orbs, centered as a pair. 56px avatars each in a vertical
           stack with name + a per-avatar speaking/idle status label — the bigger
@@ -170,7 +192,34 @@ export function CallStrip({
           </button>
         </div>
       )}
+
+      {/* Screen share — only while connected. Toggle: start (OS picker) or stop. */}
+      {connected && (
+        <button
+          onClick={() => (screenSharing ? stopScreenShare() : void startScreenShare())}
+          title={screenSharing ? "Parar de compartilhar a tela" : "Compartilhar a tela"}
+          className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition ${
+            screenSharing
+              ? "border-harbor-sea/50 bg-harbor-sea/15 text-harbor-deep"
+              : "border-harbor-card-border bg-harbor-surface-strong text-harbor-ink hover:bg-harbor-surface"
+          }`}
+        >
+          {screenSharing ? <MonitorX className="h-4 w-4" /> : <MonitorUp className="h-4 w-4" />}
+          {screenSharing ? "Parar tela" : "Compartilhar tela"}
+        </button>
+      )}
     </div>
+
+    {/* Partner's screen share — a video panel below the strip. */}
+    {partnerScreenSharing && (
+      <div className="mt-2 overflow-hidden rounded-2xl border border-harbor-card-border bg-black">
+        <video ref={videoRef} autoPlay playsInline muted className="max-h-64 w-full object-contain" />
+        <p className="bg-black/80 px-3 py-1 text-center text-xs text-white/80">
+          {partnerName} está compartilhando a tela
+        </p>
+      </div>
+    )}
+    </>
   );
 }
 

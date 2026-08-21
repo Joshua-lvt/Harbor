@@ -2,8 +2,8 @@
  * WebSocket client to the Harbor relay.
  *
  * The main window owns this singleton for the app lifetime. Auto-reconnect
- * with exponential backoff (1s → 2 → 4 → 8 → 15s cap). Heartbeats every 25s;
- * the relay times dead sockets out after ~90s. Re-announces the last known
+ * with exponential backoff (1s → 2 → 4 → 8 → 15s cap). Heartbeats every 60s;
+ * the relay times dead sockets out after ~180s. Re-announces the last known
  * presence on every (re)connect so a dropped link doesn't reset "away".
  *
  * - Idempotent connect() — safe to call from any screen/route.
@@ -125,7 +125,7 @@ class HarborSocket {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       this.send({ type: "heartbeat" });
-    }, 25_000);
+    }, 60_000);
   }
   private stopHeartbeat() {
     if (this.heartbeatTimer != null) {

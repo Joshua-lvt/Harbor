@@ -27,22 +27,40 @@ async function idleSeconds(): Promise<number> {
   }
 }
 
+/** Consecutive polls in the same state required before we transition. With
+ *  POLL_MS = 20s this is ~40s of sustained idle (or activity) before the
+ *  partner's status flips — a hard hysteresis that stops the away/online
+ *  flapping when the OS idle value oscillates around the threshold (a known
+ *  Linux issue: logind/DBus idle can jitter near the boundary). */
+const REQUIRED_CONSECUTIVE = 2;
+
 export function usePresence(awayAfterMinutes: number, connected: boolean) {
   const current = useRef<"online" | "away">("online");
 
   useEffect(() => {
     if (!connected) return;
     const threshold = Math.max(1, awayAfterMinutes) * 60;
+    // Streak counters reset on every effect run (threshold/connect change).
+    let awayStreak = 0;
+    let onlineStreak = 0;
 
     const tick = async () => {
       const idle = await idleSeconds();
       const isAway = idle >= threshold;
-      if (isAway && current.current !== "away") {
-        current.current = "away";
-        socket.setPresence("away");
-      } else if (!isAway && current.current !== "online") {
-        current.current = "online";
-        socket.setPresence("online");
+      if (isAway) {
+        awayStreak += 1;
+        onlineStreak = 0;
+        if (awayStreak >= REQUIRED_CONSECUTIVE && current.current !== "away") {
+          current.current = "away";
+          socket.setPresence("away");
+        }
+      } else {
+        onlineStreak += 1;
+        awayStreak = 0;
+        if (onlineStreak >= REQUIRED_CONSECUTIVE && current.current !== "online") {
+          current.current = "online";
+          socket.setPresence("online");
+        }
       }
     };
 

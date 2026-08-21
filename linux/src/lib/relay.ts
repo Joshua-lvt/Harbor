@@ -143,14 +143,31 @@ export async function setProfile(
   });
 }
 
-/** Fetch the partner's current presence + last_seen (used on cold start). */
+/** How long a cached /partner result stays fresh. The partner's STATIC info
+ *  (name, pubkey, avatar) changes rarely, and presence is refreshed live over
+ *  the socket — so a short in-memory cache lets the 3 call sites (App cold
+ *  start, HomeScreen mount, Chat mount) share ONE fetch per launch instead of
+ *  three, without ever showing stale presence. */
+const PARTNER_CACHE_TTL_MS = 30_000;
+
+/** Fetch the partner's current presence + last_seen (used on cold start).
+ *  Cached in memory for PARTNER_CACHE_TTL_MS keyed by device_id, so the
+ *  redundant cold-start / Home / Chat fetches collapse into a single request. */
 export async function getPartner(id: Identity): Promise<PartnerInfo> {
+  const now = Date.now();
+  const hit = partnerCache.get(id.device_id);
+  if (hit && now - hit.at < PARTNER_CACHE_TTL_MS) return hit.value;
   const base = httpBase(id.relay_url).replace(/\/$/, "");
   const url = `${base}/partner?device_id=${encodeURIComponent(id.device_id)}&secret=${encodeURIComponent(id.device_secret)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`relay /partner: ${res.status}`);
-  return res.json();
+  const value = (await res.json()) as PartnerInfo;
+  partnerCache.set(id.device_id, { at: now, value });
+  return value;
 }
+
+/** In-memory /partner cache (see getPartner). */
+const partnerCache = new Map<string, { at: number; value: PartnerInfo }>();
 
 /** Fetch my own state (pairing code, partner link, display name) — used at
  *  cold start: if /partner 404s, the partner unpaired us while we were offline,

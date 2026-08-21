@@ -57,10 +57,6 @@ fn local_migrations() -> Vec<Migration> {
             kind: MigrationKind::Up,
         },
         Migration {
-            // Feature 4: real app icons. `exe` is the lowercased process name
-            // (the activity event's key); `icon_data` a base64 data URL PNG or
-            // NULL once the sender confirms a generated fallback. Keyed by exe
-            // so one icon is cached + reused per process per device.
             version: 4,
             description: "create app_icons table",
             sql: "CREATE TABLE IF NOT EXISTS app_icons (
@@ -68,6 +64,25 @@ fn local_migrations() -> Vec<Migration> {
                 icon_data   TEXT,
                 updated_at  INTEGER NOT NULL
             );",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // Bug 4: in-app Harbor notification history. `kind` is one of
+            // message/presence/quick; `read` tracks the unread badge in the
+            // Notifications tab. Written by services/notificationStore.ts.
+            version: 5,
+            description: "create notifications table",
+            sql: "CREATE TABLE IF NOT EXISTS notifications (
+                id          TEXT PRIMARY KEY,
+                kind        TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                icon        TEXT,
+                timestamp   INTEGER NOT NULL,
+                read        INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_ts
+                ON notifications(timestamp DESC);",
             kind: MigrationKind::Up,
         },
     ]
@@ -183,6 +198,52 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Linux (WebKitGTK): auto-grant the microphone. WebKitGTK's default
+            // permission handler DENIES getUserMedia unless a handler is
+            // connected — which is why the always-on call could never open the
+            // mic on Linux ("O Linux está bloqueando o microfone"). We connect
+            // a permission-request handler that allows audio capture, so the
+            // frontend's getUserMedia resolves instead of throwing
+            // NotAllowedError. The user-gesture requirement (transient
+            // activation) still applies — the frontend's first-interaction
+            // auto-grant covers that (see voice.ts armAutoGrant).
+            #[cfg(target_os = "linux")]
+            {
+                use tauri::Manager as _;
+                use webkit2gtk::glib::Cast as _;
+                use webkit2gtk::PermissionRequestExt as _;
+                use webkit2gtk::SettingsExt as _;
+                use webkit2gtk::UserMediaPermissionRequestExt as _;
+                use webkit2gtk::WebViewExt as _;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.with_webview(|webview| {
+                        let wv = webview.inner();
+                        // WebRTC + media capture are OFF by default in WebKitGTK.
+                        // Without this, `RTCPeerConnection` is undefined in the
+                        // webview and the always-on call can never work on Linux
+                        // ("Can't find variable: RTCPeerConnection"). Enable them
+                        // here, before the page loads.
+                        if let Some(settings) = wv.settings() {
+                            settings.set_enable_webrtc(true);
+                            settings.set_enable_media_stream(true);
+                            settings.set_enable_media_capabilities(true);
+                        }
+                        // Auto-grant the microphone (see the comment above).
+                        wv.connect_permission_request(|_wv, request| {
+                            if let Some(media) =
+                                request.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>()
+                            {
+                                if media.is_for_audio_device() {
+                                    media.allow();
+                                    return true;
+                                }
+                            }
+                            false
+                        });
+                    });
+                }
+            }
+
             // Autostart: desktop-only, registered at runtime per the plugin docs.
             // If the plugin fails to initialize here the frontend's enable()/
             // disable() calls throw Promise rejections — the Settings surface
