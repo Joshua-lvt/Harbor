@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Identity, Settings } from "../../lib/types";
 import { saveIdentity, saveSettings, loadSettings } from "../../lib/identity";
-import { setProfile } from "../../lib/relay";
+import { getMobileCode, setProfile } from "../../lib/relay";
 import { socket } from "../../services/ws";
 import { setAutostart } from "../../services/autostart";
 import { fileToAvatarDataUrl } from "../../lib/image";
@@ -39,6 +39,12 @@ export default function SettingsScreen({
   const [saved, setSaved] = useState("");
   const [unpairing, setUnpairing] = useState(false);
   const [unpairErr, setUnpairErr] = useState("");
+  const [mobileCode, setMobileCode] = useState<string | null>(null);
+  const [mobileExpires, setMobileExpires] = useState<number | null>(null);
+  const [mobileRemaining, setMobileRemaining] = useState<number | null>(null);
+  const [mobileBusy, setMobileBusy] = useState(false);
+  const [mobileErr, setMobileErr] = useState("");
+  const [mobileCopied, setMobileCopied] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarErr, setAvatarErr] = useState("");
   // The relay URL is hidden by default — it's an advanced/private setting the
@@ -49,6 +55,50 @@ export default function SettingsScreen({
   useEffect(() => {
     loadSettings().then(setS);
   }, []);
+
+  useEffect(() => {
+    if (mobileExpires === null) {
+      setMobileRemaining(null);
+      return;
+    }
+    const update = () => setMobileRemaining(Math.max(0, Math.ceil(mobileExpires - Date.now() / 1000)));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [mobileExpires]);
+
+  async function generateMobileCode() {
+    if (mobileBusy) return;
+    setMobileBusy(true);
+    setMobileErr("");
+    setMobileCopied(false);
+    try {
+      const result = await getMobileCode({ ...identity, relay_url: relayUrl });
+      setMobileCode(result.mobile_code);
+      setMobileExpires(result.expires);
+    } catch (e) {
+      setMobileErr(e instanceof Error ? e.message : "Não foi possível gerar o código.");
+    } finally {
+      setMobileBusy(false);
+    }
+  }
+
+  async function copyMobileCode() {
+    if (!mobileCode) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(mobileCode);
+      } else {
+        const input = document.getElementById("harbor-mobile-code") as HTMLInputElement | null;
+        input?.select();
+        document.execCommand("copy");
+      }
+      setMobileCopied(true);
+      window.setTimeout(() => setMobileCopied(false), 1800);
+    } catch {
+      setMobileCopied(false);
+    }
+  }
 
   async function onPickAvatar(files: FileList | null) {
     if (!files || !files[0]) return;
@@ -391,6 +441,49 @@ export default function SettingsScreen({
 
         <section className="flex flex-col gap-2 mt-4 pt-4 border-t border-harbor-line">
           <p className="text-xs font-medium text-harbor-deep/70">Conexão</p>
+          <div className="rounded-xl bg-harbor-surface/70 px-3 py-3 flex flex-col gap-2">
+            <div>
+              <p className="text-sm text-harbor-ink">Vincular celular</p>
+              <p className="text-[11px] text-harbor-ink/50">
+                Gere um código no PC e digite-o no Harbor para Android. O código é
+                temporário e gerar outro invalida o anterior.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void generateMobileCode()}
+              disabled={mobileBusy}
+              className="rounded-xl bg-harbor-sea px-4 py-2 text-sm font-medium text-white hover:bg-harbor-deep disabled:opacity-50 transition"
+            >
+              {mobileBusy ? "Gerando…" : mobileCode ? "Gerar novo código" : "Gerar código"}
+            </button>
+            {mobileCode && (
+              <div className="flex flex-col gap-1">
+                <div className="flex gap-2">
+                  <input
+                    id="harbor-mobile-code"
+                    readOnly
+                    value={mobileCode}
+                    aria-label="Código para vincular celular"
+                    className="min-w-0 flex-1 rounded-lg border border-harbor-sky bg-harbor-surface-strong px-3 py-2 text-center font-mono text-lg tracking-widest outline-none select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void copyMobileCode()}
+                    className="rounded-lg border border-harbor-sky px-3 py-2 text-xs font-medium text-harbor-deep hover:bg-harbor-surface transition"
+                  >
+                    {mobileCopied ? "Copiado" : "Copiar"}
+                  </button>
+                </div>
+                <p className="text-[11px] text-harbor-ink/50">
+                  {mobileRemaining === 0
+                    ? "Código expirado — gere outro."
+                    : `Expira em aproximadamente ${Math.ceil((mobileRemaining ?? 0) / 60)} min.`}
+                </p>
+              </div>
+            )}
+            {mobileErr && <p className="text-[11px] text-red-700 dark:text-red-300">{mobileErr}</p>}
+          </div>
           <p className="text-[11px] text-harbor-ink/50">
             Desvincula o parceiro atual. O histórico de chat com esta pessoa é
             apagado, e ambos podem parear com outras pessoas a partir de agora.

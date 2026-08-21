@@ -8,6 +8,7 @@
 mod foreground;
 mod icons;
 mod idle;
+mod media;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -162,6 +163,7 @@ fn open_microphone_settings() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(media::MediaRuntime::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         // window-state: restore/save the main window's size + position, but NOT
@@ -325,7 +327,12 @@ pub fn run() {
             foreground::get_foreground_app,
             foreground::is_key_pressed,
             icons::get_app_icon,
-            open_microphone_settings
+            open_microphone_settings,
+            media::media_capabilities,
+            media::media_start,
+            media::media_stop,
+            media::media_set_ptt,
+            media::media_receive_signal
         ])
         .run(tauri::generate_context!())
         .expect("error while running Harbor");

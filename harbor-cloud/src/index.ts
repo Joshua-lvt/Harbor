@@ -8,16 +8,23 @@
  * (via the Registry) and routes (to the per-pair DO). CORS is permissive to match the
  * FastAPI relay (which allowed all origins) so the Tauri client keeps working.
  */
+import { verifySecret } from "./util";
 import {
   MeInfo,
   PartnerInfo,
   PairResponse,
+  MediaAuthorizationRequest,
+  MediaAuthorizationResponse,
   RegisterResponse,
   RegisterRequest,
   PairRequest,
   UnpairRequest,
   UnpairResponse,
   UpdateProfileRequest,
+  MobileCodeRequest,
+  MobileCodeResponse,
+  ConnectMobileRequest,
+  ConnectMobileResponse,
 } from "./protocol";
 
 // Re-export the Durable Object classes so the Worker bundle (main = src/index.ts)
@@ -42,7 +49,7 @@ function cors(): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
     "Access-Control-Max-Age": "86400",
   };
 }
@@ -104,6 +111,36 @@ function validatePair(v: unknown): PairRequest | null {
   return { device_id: o["device_id"], device_secret: o["device_secret"], partner_code: o["partner_code"] };
 }
 
+function validateMediaAuthorization(v: unknown): MediaAuthorizationRequest | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (
+    !isStr(o["device_id"]) ||
+    !isStr(o["device_secret"]) ||
+    !isStr(o["partner_id"]) ||
+    !isStr(o["room_id"])
+  ) {
+    return null;
+  }
+  return {
+    device_id: o["device_id"],
+    device_secret: o["device_secret"],
+    partner_id: o["partner_id"],
+    room_id: o["room_id"],
+  };
+}
+
+function canonicalMediaRoom(deviceId: string, partnerId: string): string {
+  const [first, second] = [deviceId.trim(), partnerId.trim()].sort();
+  return `pair:${encodeURIComponent(first)}:${encodeURIComponent(second)}`;
+}
+
+function validateInternalBearer(request: Request, expected: string | undefined): boolean {
+  const value = request.headers.get("Authorization") ?? "";
+  const match = /^Bearer\s+([^\s]+)$/i.exec(value);
+  return Boolean(expected && match && verifySecret(expected, match[1]));
+}
+
 function validateProfile(v: unknown): UpdateProfileRequest | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -126,6 +163,24 @@ function validateUnpair(v: unknown): UnpairRequest | null {
   const o = v as Record<string, unknown>;
   if (!isStr(o["device_id"]) || !isStr(o["device_secret"])) return null;
   return { device_id: o["device_id"], device_secret: o["device_secret"] };
+}
+
+function validateMobileCode(v: unknown): MobileCodeRequest | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (!isStr(o["device_id"]) || !isStr(o["device_secret"])) return null;
+  return { device_id: o["device_id"], device_secret: o["device_secret"] };
+}
+
+function validateConnectMobile(v: unknown): ConnectMobileRequest | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (!isStr(o["device_id"]) || !isStr(o["device_secret"]) || !isStr(o["mobile_code"])) return null;
+  return {
+    device_id: o["device_id"],
+    device_secret: o["device_secret"],
+    mobile_code: o["mobile_code"],
+  };
 }
 
 /* ─────────────────────────── router ──────────────────────────────── */
@@ -166,6 +221,27 @@ export default {
         return doRes; // 101 responses don't take CORS headers.
       }
 
+      // Private server-to-server authorization used by the Supabase media-session
+      // function. The bearer is a Cloudflare secret, never a device credential.
+      if (request.method === "POST" && url.pathname === "/media-authorize") {
+        const internalToken = env.HARBOR_MEDIA_AUTH_TOKEN;
+        if (!internalToken) return withCors(json({ detail: "media_auth_not_configured" }, 503));
+        if (!validateInternalBearer(request, internalToken)) {
+          return withCors(json({ detail: "unauthorized" }, 401));
+        }
+        const body = await readJson(request, validateMediaAuthorization);
+        if (!body.ok) return withCors(body.response);
+        if (body.value.room_id !== canonicalMediaRoom(body.value.device_id, body.value.partner_id)) {
+          return withCors(json({ detail: "invalid_media_room" }, 400));
+        }
+        const result: MediaAuthorizationResponse = await registry(env).authorizeMedia(
+          body.value.device_id,
+          body.value.device_secret,
+          body.value.partner_id,
+        );
+        return withCors(json(result));
+      }
+
       // HTTP routes → Registry RPC.
       if (request.method === "POST" && url.pathname === "/register") {
         const body = await readJson(request, validateRegister);
@@ -200,6 +276,27 @@ export default {
           body.value.avatar,
         );
         return withCors(json({ ok: true }));
+      }
+
+      if (request.method === "POST" && url.pathname === "/mobile_code") {
+        const body = await readJson(request, validateMobileCode);
+        if (!body.ok) return withCors(body.response);
+        const r: MobileCodeResponse = await registry(env).mintMobileCode(
+          body.value.device_id,
+          body.value.device_secret,
+        );
+        return withCors(json(r));
+      }
+
+      if (request.method === "POST" && url.pathname === "/connect_mobile") {
+        const body = await readJson(request, validateConnectMobile);
+        if (!body.ok) return withCors(body.response);
+        const r: ConnectMobileResponse = await registry(env).bindObserver(
+          body.value.device_id,
+          body.value.device_secret,
+          body.value.mobile_code,
+        );
+        return withCors(json(r));
       }
 
       if (request.method === "GET" && url.pathname === "/partner") {

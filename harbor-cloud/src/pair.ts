@@ -33,6 +33,9 @@ import { nowTs, parseFrame } from "./util";
 interface MemberRow {
   device_id: string;
   pair_key: string;
+  role: "peer" | "observer";
+  /** Set only for observers; identifies the exact PC they monitor. */
+  observed_device_id: string | null;
   last_presence: string;
   last_seen: number | null;
   pending_grace_until: number | null;
@@ -46,6 +49,8 @@ interface OutboxRow {
   ts: number;
 }
 
+/** Stable pre-observer schema. Existing DOs need ALTER TABLE migrations, not a
+ * changed CREATE IF NOT EXISTS declaration. */
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS members (
     device_id            TEXT PRIMARY KEY,
@@ -81,6 +86,24 @@ export class HarborPair extends DurableObject<Env> {
     if (!this.#schema) {
       this.#schema = this.ctx.blockConcurrencyWhile(async () => {
         this.ctx.storage.sql.exec(SCHEMA_V1, nowTs());
+        const columns = new Set(
+          this.ctx.storage.sql
+            .exec("PRAGMA table_info(members)")
+            .toArray()
+            .map((row) => String((row as { name: unknown }).name)),
+        );
+        if (!columns.has("role"))
+          this.ctx.storage.sql.exec("ALTER TABLE members ADD COLUMN role TEXT NOT NULL DEFAULT 'peer'");
+        if (!columns.has("observed_device_id"))
+          this.ctx.storage.sql.exec("ALTER TABLE members ADD COLUMN observed_device_id TEXT");
+        this.ctx.storage.sql.exec(
+          "CREATE INDEX IF NOT EXISTS idx_members_observer_target " +
+            "ON members(role, observed_device_id)",
+        );
+        this.ctx.storage.sql.exec(
+          "INSERT OR IGNORE INTO _schema_migrations (version, applied_at) VALUES (2, ?)",
+          nowTs(),
+        );
       });
     }
     return this.#schema;
@@ -102,13 +125,25 @@ export class HarborPair extends DurableObject<Env> {
     return Number.isFinite(n) && n > 0 ? n : 7;
   }
 
-  /** The other member of this pair (exactly two devices). */
+  /** The other PEER member of this pair (exactly one, when present). Observers
+   *  (`role='observer'`) are excluded from peer routing so they never displace a
+   *  real partner: a mobile observer added to a solo PC must not become its
+   *  "partner" nor steal its would-be peer's messages. */
   private partnerOf(deviceId: string): string | null {
     const rows = this.q<{ device_id: string }>(
-      "SELECT device_id FROM members WHERE device_id != ?",
+      "SELECT device_id FROM members WHERE device_id != ? AND role = 'peer'",
       deviceId,
     );
     return rows.length ? rows[0].device_id : null;
+  }
+
+  /** Observers explicitly bound to this source PC. A target-specific query is
+   *  important: an observer of A must not receive B's activity in an A:B pair. */
+  private observersOf(sourceId: string): string[] {
+    return this.q<{ device_id: string }>(
+      "SELECT device_id FROM members WHERE role = 'observer' AND observed_device_id = ?",
+      sourceId,
+    ).map((r) => r.device_id);
   }
 
   private getMember(deviceId: string): MemberRow | null {
@@ -137,6 +172,13 @@ export class HarborPair extends DurableObject<Env> {
     return delivered;
   }
 
+  /** Fan a ServerMessage out to every observer in the pair except `sourceId`
+   *  (the device whose event triggered the push — normally the peer that sent it).
+   *  Skips observers that are offline; a solo PC with no observer is a no-op. */
+  private sendToObservers(sourceId: string, msg: ServerMessage): void {
+    for (const o of this.observersOf(sourceId)) this.sendTo(o, msg);
+  }
+
   /* ─────────────────────────── RPC ──────────────────────────────── */
 
   /** Idempotent: write both members rows so the pair survives hibernation/bootstrap.
@@ -144,15 +186,62 @@ export class HarborPair extends DurableObject<Env> {
   async bootstrap(a: string, b: string): Promise<void> {
     await this.ensureSchema();
     const pk = this.ctx.id.name;
+    // Existing rows are preserved (INSERT OR IGNORE) so a re-bootstrap never
+    // downgrades a member's role (e.g. an observer stays an observer).
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO members(device_id, pair_key, last_presence) VALUES (?, ?, 'offline')",
+      "INSERT OR IGNORE INTO members(device_id, pair_key, role, last_presence) VALUES (?, ?, 'peer', 'offline')",
       a,
       pk,
     );
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO members(device_id, pair_key, last_presence) VALUES (?, ?, 'offline')",
+      "INSERT OR IGNORE INTO members(device_id, pair_key, role, last_presence) VALUES (?, ?, 'peer', 'offline')",
       b,
       pk,
+    );
+  }
+
+  /** Add or repair a receive-only observer membership. The target is persisted so
+   *  fan-out and cold-start snapshots are scoped to the PC that minted the code. */
+  async addObserver(mobileId: string, targetId: string): Promise<void> {
+    await this.ensureSchema();
+    const pk = this.ctx.id.name;
+    const target = this.getMember(targetId);
+    if (!target || target.role !== "peer") throw new Error("observer target is not a peer");
+    const existing = this.getMember(mobileId);
+    if (existing?.role === "peer") throw new Error("device is already a peer");
+    this.ctx.storage.sql.exec(
+      "INSERT INTO members(device_id, pair_key, role, observed_device_id, last_presence) " +
+        "VALUES (?, ?, 'observer', ?, 'offline') " +
+        "ON CONFLICT(device_id) DO UPDATE SET pair_key = excluded.pair_key, " +
+        "role = 'observer', observed_device_id = excluded.observed_device_id",
+      mobileId,
+      pk,
+      targetId,
+    );
+  }
+
+  /** Return observers for a target before a Registry pair-key transition. */
+  async listObservers(targetId: string): Promise<string[]> {
+    await this.ensureSchema();
+    return this.q<{ device_id: string }>(
+      "SELECT device_id FROM members WHERE role = 'observer' AND observed_device_id = ?",
+      targetId,
+    ).map((r) => r.device_id);
+  }
+
+  /** Remove an observer from an obsolete pair and close its old sockets. */
+  async removeObserver(mobileId: string): Promise<void> {
+    await this.ensureSchema();
+    for (const ws of this.ctx.getWebSockets(mobileId)) {
+      try {
+        ws.close(4001, "observer_rehomed");
+      } catch {
+        /* already closed */
+      }
+    }
+    this.ctx.storage.sql.exec(
+      "DELETE FROM members WHERE device_id = ? AND role = 'observer'",
+      mobileId,
     );
   }
 
@@ -179,10 +268,14 @@ export class HarborPair extends DurableObject<Env> {
     this.sendTo(exPartnerId, { type: "unpaired", pairing_code: newCode, ts: nowTs() });
   }
 
-  /** RPC for POST /unpair — clear the outbox between these two devices (`pairing.py:234`). */
+  /** RPC for POST /unpair — clear the outbox between these two devices (`pairing.py:234`).
+ *  Only PEER rows participate in chat/outbox; observers never have buffered mail, so
+ *  restrict the sweep to `role='peer'` to avoid picking up an observer as a "member". */
   async clearOutboxForPair(): Promise<void> {
     await this.ensureSchema();
-    const ids = this.q<{ device_id: string }>("SELECT device_id FROM members");
+    const ids = this.q<{ device_id: string }>(
+      "SELECT device_id FROM members WHERE role = 'peer'",
+    );
     if (ids.length < 2) return;
     const [a, b] = [ids[0].device_id, ids[1].device_id];
     this.ctx.storage.sql.exec(
@@ -225,9 +318,44 @@ export class HarborPair extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, [deviceId]);
     server.serializeAttachment({ device_id: deviceId });
 
-    // Connect logic — mirrors `ws.py:250-259`.
+    const isObserver = member.role === "observer";
+    if (isObserver) {
+      // Observer connect: receive-only. No presence persistence (we'd overwrite our
+      // own offline row with online), no partner notify, no outbox flush (the
+      // outbox only holds peer→peer chat, never observer mail). Refresh the exact
+      // target PC's CURRENT presence so an A observer never boots from B's state.
+      const targetId = member.observed_device_id;
+      const target = targetId ? this.getMember(targetId) : null;
+      const targetLive = targetId ? this.isOnline(targetId) : false;
+      if (targetId && target) {
+        this.sendTo(deviceId, {
+          type: "presence",
+          device_id: targetId,
+          state: targetLive ? (target.last_presence === "away" ? "away" : "online") : "offline",
+          ts: nowTs(),
+          ...(target.last_seen !== null ? { last_seen: target.last_seen } : {}),
+        });
+      }
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // Connect logic — mirrors `ws.py:250-259`, with one fix: do NOT blindly
+    // flip presence to "online" on every connect. A reconnecting device whose
+    // user is genuinely away has `last_presence = "away"` (still within the
+    // grace window); forcing "online" here makes the partner's status dot flap
+    // online→away on every dropped-and-reopened socket — exactly the flicker the
+    // 30s notify-debounce works around, but the UI dot (Home/Chat/Widget) has no
+    // such debounce so it visibly oscillates. Preserve the user's last
+    // self-reported state across reconnects; only a genuine offline→connected
+    // transition (fresh boot, or reconnect AFTER grace already pushed offline)
+    // announces "online". The client re-asserts its current presence on every
+    // `onopen` regardless, so a drifted stored value is corrected within a RTT.
+    const announce = (member.last_presence === "offline" ? "online" : member.last_presence) as
+      | "online"
+      | "away";
     this.ctx.storage.sql.exec(
-      "UPDATE members SET last_presence = 'online', last_seen = ?, pending_grace_until = NULL WHERE device_id = ?",
+      "UPDATE members SET last_presence = ?, last_seen = ?, pending_grace_until = NULL WHERE device_id = ?",
+      announce,
       nowTs(),
       deviceId,
     );
@@ -236,10 +364,18 @@ export class HarborPair extends DurableObject<Env> {
       this.sendTo(partnerId, {
         type: "presence",
         device_id: deviceId,
-        state: "online",
+        state: announce,
         ts: nowTs(),
       });
     }
+    // Fan the peer's connect out to observers too (runs even without a partner —
+    // a solo PC still reports its liveness to a linked observer).
+    this.sendToObservers(deviceId, {
+      type: "presence",
+      device_id: deviceId,
+      state: announce,
+      ts: nowTs(),
+    });
     this.flushOutboxFor(deviceId);
 
     return new Response(null, { status: 101, webSocket: client });
@@ -256,11 +392,31 @@ export class HarborPair extends DurableObject<Env> {
     const deviceId = attachment?.device_id;
     if (!deviceId) return; // Should not happen; we tagged at accept.
 
-    // Frame-size guard before parsing (REGRA: reject large frames, keep the socket).
+    // Apply the same byte cap before parsing on every path, including observers.
     const len = typeof message === "string" ? message.length : message.byteLength;
     const cap = Number(this.env.HARBOR_MAX_FRAME_BYTES) || 262_144;
     if (len > cap) {
       this.sendTo(deviceId, { type: "error", reason: "frame_too_large" });
+      return;
+    }
+
+    // Observers are receive-only: accept ONLY heartbeats (to keep `last_seen` fresh
+    // so the relay/partner polling sees the observer as alive and to satisfy the
+    // mobile client's own ping). Any other inbound message is ignored so a mobile
+    // observer can never push presence/activity/chat back into the PC's pair.
+    const mRow = this.getMember(deviceId);
+    const isObserver = mRow?.role === "observer";
+    if (isObserver) {
+      const parsed = parseFrame(message);
+      if (parsed === null) return;
+      const v = validateClientMessage(parsed);
+      if (!v.ok) return;
+      if (v.msg.type !== "heartbeat") return;
+      this.ctx.storage.sql.exec(
+        "UPDATE members SET last_seen = ? WHERE device_id = ?",
+        nowTs(),
+        deviceId,
+      );
       return;
     }
 
@@ -291,6 +447,12 @@ export class HarborPair extends DurableObject<Env> {
             nowTs(),
             deviceId,
           );
+          this.sendToObservers(deviceId, {
+            type: "presence",
+            device_id: deviceId,
+            state: msg.state,
+            ts: nowTs(),
+          });
           const p = this.partnerOf(deviceId);
           if (p)
             this.sendTo(p, {
@@ -317,6 +479,12 @@ export class HarborPair extends DurableObject<Env> {
         }
 
         case "activity": {
+          this.sendToObservers(deviceId, {
+            type: "activity",
+            device_id: deviceId,
+            app: msg.app,
+            ts: nowTs(),
+          });
           const p = this.partnerOf(deviceId);
           if (p)
             this.sendTo(p, {
@@ -471,6 +639,11 @@ export class HarborPair extends DurableObject<Env> {
     const deviceId = attachment?.device_id;
     if (!deviceId) return;
 
+    // Observers are observe-only: no persisted presence to broadcast, so no grace
+    // alarm and no offline fan-out. (Their own disconnect is invisible to peers.)
+    const mRow = this.getMember(deviceId);
+    if (mRow?.role === "observer") return;
+
     // Only schedule the grace if this was the device's last live socket (a duplicate
     // close from the replaced connection shouldn't flap a freshly-accepted one).
     if (!this.isOnline(deviceId)) {
@@ -518,6 +691,14 @@ export class HarborPair extends DurableObject<Env> {
         now,
         m.device_id,
       );
+      // Fan the offline out to the peer AND any observers.
+      this.sendToObservers(m.device_id, {
+        type: "presence",
+        device_id: m.device_id,
+        state: "offline",
+        ts: now,
+        last_seen: now,
+      });
       const partner = this.partnerOf(m.device_id);
       if (partner) {
         this.sendTo(partner, {

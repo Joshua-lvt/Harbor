@@ -43,3 +43,32 @@ create policy "settings_upsert_own"
   for all
   using (scope = current_setting('request.headers', true)::jsonb ->> 'x-scope')
   with check (scope = current_setting('request.headers', true)::jsonb ->> 'x-scope');
+
+-- Ephemeral voice signaling uses private Supabase Realtime Broadcast channels.
+-- The Edge Function must mint a short-lived JWT whose `media_topic` claim is
+-- exactly the channel topic and whose `sub` is the Harbor device_id. The public
+-- anon key alone never satisfies these policies. SDP/ICE are not stored in a
+-- public table; these policies authorize the transient `realtime.messages`
+-- records used internally by Broadcast.
+--
+-- Apply these policies only after enabling Realtime authorization in the project.
+-- They are deliberately independent from the settings X-Scope header, which is
+-- client-controlled and is not suitable for media authorization.
+drop policy if exists "voice_room_members_receive" on realtime.messages;
+create policy "voice_room_members_receive"
+  on realtime.messages
+  for select
+  to authenticated
+  using (
+    realtime.topic() = (select auth.jwt() ->> 'media_topic')
+  );
+
+drop policy if exists "voice_room_members_publish" on realtime.messages;
+create policy "voice_room_members_publish"
+  on realtime.messages
+  for insert
+  to authenticated
+  with check (
+    realtime.topic() = (select auth.jwt() ->> 'media_topic')
+    and payload ->> 'sender_id' = (select auth.jwt() ->> 'sub')
+  );

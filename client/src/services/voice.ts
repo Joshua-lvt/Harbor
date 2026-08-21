@@ -36,37 +36,30 @@
  * button would deny-and-reappear unchanged — "nothing happens".
  *
  * MVP limits (documented honestly):
- *  - A single public STUN server; no TURN relay, so peers behind symmetric NAT
- *    may fail to connect cross-network (works on LAN/Tailscale). TURN is future.
- *  - Signaling is transient (forward-only on the relay). The offerer's ~8s retry
- *    covers an offline/late partner; there is no "missed call" buffering.
+ *  - ICE starts with public STUN and falls back to STUN-only when the authenticated
+ *    TURN function is unavailable; a short-lived TURN response is used when present.
+ *  - Signaling is transient (forward-only on the relay/Broadcast paths). The
+ *    offerer's ~8s retry covers an offline/late partner; there is no "missed call"
+ *    buffering.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { socket } from "./ws";
 import { platformName } from "../lib/platform";
 import { recordCall, classifyTransport, type Transport } from "./callMetrics";
+import { IceConfigurationProvider } from "./ice";
+import { createMediaSession } from "./mediaSession";
+import { JsWebRtcEngine, type MediaEngine } from "./media/engine";
+import { roomIdForPair } from "./signaling/room";
+import { RelaySignalingTransport } from "./signaling/relay";
+import { SupabaseBroadcastTransport } from "./signaling/supabaseBroadcast";
+import {
+  makeSignalEnvelope,
+  type SignalEnvelope,
+  type SignalingTransport,
+} from "./signaling/types";
 import type { ServerEvent } from "../lib/types";
 
-// ICE servers: public STUN for direct P2P path discovery, plus a TURN relay so
-// peers behind symmetric NAT can still connect (the "call nunca funcionou" on
-// different networks). TURN relays media through the server when a direct path
-// is impossible — the retry cap below stops any infinite reconnect loop.
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun.cloudflare.com:3478" },
-  {
-    // ExpressTURN free relay. Both UDP and TCP transports are offered so a
-    // restrictive network that blocks UDP can still relay over TCP.
-    urls: [
-      "turn:free.expressturn.com:3478?transport=udp",
-      "turn:free.expressturn.com:3478?transport=tcp",
-    ],
-    username: "000000002102610296",
-    credential: "SJ0HMDGW9K1ymBkdpIeiu7kOFqA=",
-  },
-];
 const VK_LMENU = 0xa4; // Left Alt — Push-to-Talk
 const PTT_POLL_MS = 120;
 /** Offerer re-offers on this cadence while waiting to connect. */
@@ -104,8 +97,19 @@ export interface VoiceState {
 
 type Listener = (s: VoiceState) => void;
 
-class VoiceManager {
+export interface VoiceSessionConfig {
+  deviceId: string;
+  deviceSecret: string;
+  partnerId: string;
+}
+
+interface ActiveVoiceSession extends VoiceSessionConfig {
+  roomId: string;
+}
+
+export class VoiceManager {
   private pc: RTCPeerConnection | null = null;
+  private readonly mediaEngine: MediaEngine;
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
   /** My screen-share stream (getDisplayMedia). Its video track is added to the
@@ -177,12 +181,27 @@ class VoiceManager {
   private autoGrantArmed = false;
   private autoGrantCleanup: (() => void) | null = null;
 
-  constructor() {
-    // Wire signaling to the app-lifetime socket singleton. We never unsubscribe
-    // — voice lasts the app lifetime, same as the socket. Inbound voice_signal
-    // envelopes are routed here; outbound signaling rides the same socket.
+  // --- transport/ICE adapters ----------------------------------------------
+  private session: ActiveVoiceSession | null = null;
+  private relaySignaling: SignalingTransport | null = null;
+  private broadcastSignaling: SignalingTransport | null = null;
+  private transportOffs: Array<() => void> = [];
+  private signalSeq = 0;
+  private seenSignalFingerprints = new Map<string, number>();
+  private sessionGeneration = 0;
+  private mediaAccessToken: string | null = null;
+  /** Refreshes the pair JWT before Realtime and TURN credentials expire. */
+  private mediaRefreshTimer: number | null = null;
+  private readonly iceProvider = new IceConfigurationProvider();
+  private pcCreation: Promise<boolean> | null = null;
+
+  constructor(mediaEngine: MediaEngine = new JsWebRtcEngine()) {
+    this.mediaEngine = mediaEngine;
+    // Keep a compatibility path for callers that have not configured a pair
+    // session yet. App.tsx configures the room before starting the call; once it
+    // does, the versioned RelaySignalingTransport owns inbound events instead.
     socket.onEvent((e: ServerEvent) => {
-      if (e.type !== "voice_signal") return;
+      if (e.type !== "voice_signal" || this.session) return;
       void this.onSignal(e.kind, e.data);
     });
     // Re-attempt the mic when the main window regains focus while blocked. The
@@ -237,6 +256,60 @@ class VoiceManager {
     this.autoGrantCleanup = null;
   }
 
+  /**
+   * Configure the pair-scoped media transports. The relay is attached
+   * immediately for compatibility; a short-lived Supabase media session is
+   * requested in the background and, when authorized, Broadcast is added as a
+   * second path. Publishing on both paths lets a new client reach an old peer
+   * while the inbound fingerprint guard removes duplicate SDP/ICE deliveries.
+   */
+  configureSession(config: VoiceSessionConfig): void {
+    const roomId = roomIdForPair(config.deviceId, config.partnerId);
+    this.sessionGeneration += 1;
+    const generation = this.sessionGeneration;
+    this.clearMediaRefresh();
+    this.closeSignaling();
+    this.session = { ...config, roomId };
+    this.mediaAccessToken = null;
+    this.iceProvider.clear();
+
+    const relay = new RelaySignalingTransport(roomId, config.deviceId, config.partnerId);
+    this.relaySignaling = relay;
+    this.attachTransport(relay);
+    void relay.connect().catch(() => {});
+
+    // Broadcast is optional during migration. A missing/degraded Edge Function
+    // must not stop the existing relay call from connecting.
+    void createMediaSession({
+      deviceId: config.deviceId,
+      deviceSecret: config.deviceSecret,
+      partnerId: config.partnerId,
+    })
+      .then(async (mediaSession) => {
+        if (generation !== this.sessionGeneration || !this.session) return;
+        this.mediaAccessToken = mediaSession.accessToken;
+        this.iceProvider.clear();
+        this.scheduleMediaRefresh(mediaSession.expiresAtMs, generation);
+        const broadcast = new SupabaseBroadcastTransport({
+          roomId: mediaSession.roomId,
+          localDeviceId: config.deviceId,
+          partnerDeviceId: config.partnerId,
+          accessToken: mediaSession.accessToken,
+        });
+        this.broadcastSignaling = broadcast;
+        this.attachTransport(broadcast);
+        try {
+          await broadcast.connect();
+        } catch {
+          if (this.broadcastSignaling === broadcast) this.broadcastSignaling = null;
+          await broadcast.close().catch(() => {});
+        }
+      })
+      .catch(() => {
+        // Relay-only mode is the deliberate compatibility fallback.
+      });
+  }
+
   /** Subscribe to state; returns unsubscribe. Runs the listener once immediately. */
   onState(l: Listener): () => void {
     this.listeners.add(l);
@@ -246,6 +319,117 @@ class VoiceManager {
 
   getState(): VoiceState {
     return this.state;
+  }
+
+  private attachTransport(transport: SignalingTransport): void {
+    this.transportOffs.push(transport.onMessage((message) => this.onTransportMessage(message)));
+  }
+
+  private onTransportMessage(message: SignalEnvelope): void {
+    if (!this.session || message.room_id !== this.session.roomId) return;
+    if (message.sender_id === this.session.deviceId || message.sender_id !== this.session.partnerId) return;
+    let fingerprint: string;
+    try {
+      fingerprint = `${message.kind}:${JSON.stringify(message.data)}`;
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    const previous = this.seenSignalFingerprints.get(fingerprint);
+    // Broadcast and relay are dual-published during migration. Suppress only
+    // near-simultaneous duplicates; an identical retry after the grace window
+    // remains valid for a late/offline peer.
+    if (previous != null && now - previous < 5_000) return;
+    this.seenSignalFingerprints.set(fingerprint, now);
+    for (const [key, timestamp] of this.seenSignalFingerprints) {
+      if (now - timestamp > 10_000) this.seenSignalFingerprints.delete(key);
+    }
+    void this.onSignal(message.kind, message.data);
+  }
+
+  private clearMediaRefresh(): void {
+    if (this.mediaRefreshTimer !== null) {
+      window.clearTimeout(this.mediaRefreshTimer);
+      this.mediaRefreshTimer = null;
+    }
+  }
+
+  private scheduleMediaRefresh(expiresAtMs: number, generation: number): void {
+    this.clearMediaRefresh();
+    const delay = Math.max(10_000, expiresAtMs - Date.now() - 60_000);
+    this.mediaRefreshTimer = window.setTimeout(() => {
+      this.mediaRefreshTimer = null;
+      void this.refreshMediaSession(generation);
+    }, delay);
+  }
+
+  private async refreshMediaSession(generation: number): Promise<void> {
+    const session = this.session;
+    if (!session || generation !== this.sessionGeneration) return;
+    try {
+      const renewed = await createMediaSession({
+        deviceId: session.deviceId,
+        deviceSecret: session.deviceSecret,
+        partnerId: session.partnerId,
+      });
+      if (generation !== this.sessionGeneration || this.session !== session) return;
+      this.mediaAccessToken = renewed.accessToken;
+      this.iceProvider.clear();
+      const current = this.broadcastSignaling;
+      if (current instanceof SupabaseBroadcastTransport) {
+        await current.updateAccessToken(renewed.accessToken);
+      } else {
+        const broadcast = new SupabaseBroadcastTransport({
+          roomId: renewed.roomId,
+          localDeviceId: session.deviceId,
+          partnerDeviceId: session.partnerId,
+          accessToken: renewed.accessToken,
+        });
+        this.broadcastSignaling = broadcast;
+        this.attachTransport(broadcast);
+        try {
+          await broadcast.connect();
+        } catch {
+          if (this.broadcastSignaling === broadcast) this.broadcastSignaling = null;
+          await broadcast.close().catch(() => {});
+        }
+      }
+      this.scheduleMediaRefresh(renewed.expiresAtMs, generation);
+    } catch {
+      // Keep the relay path alive and retry before the current token expires.
+      if (generation === this.sessionGeneration && this.session === session) {
+        this.mediaRefreshTimer = window.setTimeout(() => {
+          this.mediaRefreshTimer = null;
+          void this.refreshMediaSession(generation);
+        }, 30_000);
+      }
+    }
+  }
+
+  private closeSignaling(): void {
+    const transports = [this.relaySignaling, this.broadcastSignaling].filter(
+      (transport): transport is SignalingTransport => transport !== null,
+    );
+    this.relaySignaling = null;
+    this.broadcastSignaling = null;
+    this.transportOffs.forEach((off) => off());
+    this.transportOffs = [];
+    for (const transport of transports) void transport.close().catch(() => {});
+  }
+
+  private publishSignal(message: SignalEnvelope): void {
+    const transports = [this.relaySignaling, this.broadcastSignaling].filter(
+      (transport): transport is SignalingTransport => transport !== null,
+    );
+    if (!transports.length) {
+      // Last-resort compatibility for a caller that starts the singleton before
+      // configureSession; configured app sessions always use the adapter above.
+      socket.send({ type: "voice_signal", kind: message.kind, data: message.data });
+      return;
+    }
+    transports.forEach((transport) => {
+      void transport.publish(message).catch(() => {});
+    });
   }
 
   /** Set the deterministic role. Must be called before `startAlwaysOn` so the
@@ -281,12 +465,16 @@ class VoiceManager {
     }
     this.clearRetry();
     this.clearConnectingTimer();
+    this.clearMediaRefresh();
     this.stopScreenShare();
     // Record the final call metrics session (the user stopped the call). No-op
     // if no call was ever connected.
     this.recordCallEnd();
     this.teardownPC();
     this.releaseMic();
+    this.closeSignaling();
+    this.session = null;
+    this.mediaAccessToken = null;
     // Stopped: distinct from reconnecting — no socket, no retry, no mic. The
     // listeners (CallStrip) keep a stale-but-harmless status until the next
     // startAlwaysOn; the screen that shows them is gone by then anyway.
@@ -370,7 +558,7 @@ class VoiceManager {
     if (this.screenStream) return true; // already sharing
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      stream = await this.mediaEngine.getDisplayMedia({ video: true, audio: false });
     } catch {
       return false; // user cancelled the picker, or unsupported
     }
@@ -539,7 +727,7 @@ class VoiceManager {
     this.set({ status: "connecting", error: null, partnerSpeaking: false });
     // createPC returns false (and sets a clear failed state) if WebRTC is
     // unavailable — don't proceed to a null PC.
-    if (!this.createPC()) return;
+    if (!(await this.createPC())) return;
     this.startConnectingTimer();
     try {
       const offer = await this.pc!.createOffer();
@@ -557,7 +745,23 @@ class VoiceManager {
   // --- signaling ------------------------------------------------------------
 
   private sendSignal(kind: "offer" | "answer" | "ice", data: unknown): void {
-    socket.send({ type: "voice_signal", kind, data });
+    if (!this.session) {
+      socket.send({ type: "voice_signal", kind, data });
+      return;
+    }
+    let message: SignalEnvelope;
+    try {
+      message = makeSignalEnvelope({
+        roomId: this.session.roomId,
+        senderId: this.session.deviceId,
+        seq: ++this.signalSeq,
+        kind,
+        data,
+      });
+    } catch {
+      return;
+    }
+    this.publishSignal(message);
   }
 
   private async onSignal(kind: string, data: unknown): Promise<void> {
@@ -588,7 +792,7 @@ class VoiceManager {
       this.set({ status: "connecting", error: null, partnerSpeaking: false });
       // createPC returns false (and sets a clear failed state) if WebRTC is
       // unavailable — don't proceed to a null PC.
-      if (!this.createPC()) return;
+      if (!(await this.createPC())) return;
       this.startConnectingTimer();
     }
     try {
@@ -657,19 +861,47 @@ class VoiceManager {
 
   // --- peer connection + PTT ------------------------------------------------
 
-  private createPC(): boolean {
+  private async createPC(): Promise<boolean> {
+    if (this.pc) return true;
+    if (this.pcCreation) return this.pcCreation;
+    this.pcCreation = this.buildPC();
+    try {
+      return await this.pcCreation;
+    } finally {
+      this.pcCreation = null;
+    }
+  }
+
+  private async buildPC(): Promise<boolean> {
     // WebRTC is OFF by default in WebKitGTK and only present if the build
     // enables it (we enable it in lib.rs via set_enable_webrtc). If it's still
     // missing, surface a clear state instead of throwing an unhandled rejection
     // on boot ("Can't find variable: RTCPeerConnection").
-    if (typeof RTCPeerConnection === "undefined") {
+    if (!this.mediaEngine.isAvailable()) {
       this.set({
         status: "failed",
-        error: "Voz não suportada neste sistema (WebRTC indisponível).",
+        error: "Voz não suportada neste sistema (engine de mídia indisponível).",
       });
       return false;
     }
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const ice = await this.iceProvider.getConfiguration(
+      this.session && this.mediaAccessToken
+        ? {
+            accessToken: this.mediaAccessToken,
+            roomId: this.session.roomId,
+            deviceId: this.session.deviceId,
+            partnerId: this.session.partnerId,
+          }
+        : null,
+    );
+    if (!this.running) return false;
+    let pc: RTCPeerConnection;
+    try {
+      pc = this.mediaEngine.createPeerConnection({ iceServers: ice.configuration.iceServers });
+    } catch {
+      this.set({ status: "failed", error: "Não foi possível iniciar a conexão de voz." });
+      return false;
+    }
     // Add the local mic track (muted until PTT raises it).
     this.localStream?.getAudioTracks().forEach((t) => pc.addTrack(t, this.localStream!));
     this.setMicTracksEnabled(false);
@@ -769,7 +1001,7 @@ class VoiceManager {
   private async ensureMic(fromGesture = false): Promise<boolean> {
     if (this.localStream) return true;
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.localStream = await this.mediaEngine.getUserMedia({ audio: true });
       // Mic granted — no more auto-grant needed.
       this.disarmAutoGrant();
       return true;

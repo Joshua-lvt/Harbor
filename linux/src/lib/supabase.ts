@@ -26,6 +26,9 @@ export const SUPABASE_ANON_KEY = "sb_publishable_nCAy_f1fXzo5GeeX4qgOUw_cL3ZejTQ
 /** Is Supabase configured? Always true here (URL + key are baked in); kept as a
  *  single switch so a future build can disable it without touching call sites. */
 export const SUPABASE_ENABLED = true;
+const REMOTE_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+const remoteSettingsCache = new Map<string, { at: number; value: Partial<Settings> | null }>();
+const remoteSettingsRequests = new Map<string, Promise<Partial<Settings> | null>>();
 
 /**
  * Compute the settings sync scope for an identity.
@@ -69,13 +72,27 @@ export async function loadRemoteSettings(
   scope: string,
 ): Promise<Partial<Settings> | null> {
   if (!SUPABASE_ENABLED) return null;
-  const res = await supabaseFetch(
-    `/settings?scope=eq.${encodeURIComponent(scope)}&select=settings`,
-    {},
-    scope,
-  );
-  const rows = (await res.json()) as Array<{ settings: Partial<Settings> }>;
-  return rows[0]?.settings ?? null;
+  const cached = remoteSettingsCache.get(scope);
+  if (cached && Date.now() - cached.at < REMOTE_SETTINGS_CACHE_TTL_MS) return cached.value;
+  const pending = remoteSettingsRequests.get(scope);
+  if (pending) return pending;
+  const request = (async () => {
+    const res = await supabaseFetch(
+      `/settings?scope=eq.${encodeURIComponent(scope)}&select=settings`,
+      {},
+      scope,
+    );
+    const rows = (await res.json()) as Array<{ settings: Partial<Settings> }>;
+    const value = rows[0]?.settings ?? null;
+    remoteSettingsCache.set(scope, { at: Date.now(), value });
+    return value;
+  })();
+  remoteSettingsRequests.set(scope, request);
+  try {
+    return await request;
+  } finally {
+    if (remoteSettingsRequests.get(scope) === request) remoteSettingsRequests.delete(scope);
+  }
 }
 
 /** Upsert the settings row for a scope (insert or replace on scope). */
@@ -97,6 +114,7 @@ export async function saveRemoteSettings(
     },
     scope,
   );
+  remoteSettingsCache.set(scope, { at: Date.now(), value: settings });
 }
 
 /** Best-effort push of local settings to Supabase. Never throws to the caller —

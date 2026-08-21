@@ -289,6 +289,14 @@ export default function App() {
         detachNotifs();
         notifOffRef.current.push(attachNotifications((h) => socket.onEvent(h), s, id.partner_name ?? null));
         notifOffRef.current.push(attachTrayPresence((h) => socket.onEvent(h)));
+        // Configure pair-scoped signaling/ICE before engaging the always-on
+        // voice call. Relay remains the immediate compatibility path; the
+        // private Broadcast + dynamic TURN session is attempted in background.
+        voice.configureSession({
+          deviceId: id.device_id,
+          deviceSecret: id.device_secret,
+          partnerId: id.partner_id!,
+        });
         // Engage the always-on voice call. Role is deterministic (the smaller
         // device_id is the offerer) so both sides never offer at once. This is
         // idempotent against re-runs of the boot effect; `startAlwaysOn` guards
@@ -646,6 +654,8 @@ export default function App() {
         myActivity={myActivity}
         myActivityPath={myActivityPath}
         shareActivity={settings.share_activity}
+        awayAfterMinutes={settings.away_after_minutes}
+        partnerPresence={partnerPresence}
       />
     );
   else if (route === "personalization" && id.partner_id)
@@ -695,7 +705,14 @@ export default function App() {
         back={() => (window.location.hash = "#/home")}
       />
     );
-  else if (route === "chat" && id.partner_id) content = <ChatScreen identity={id} />;
+  else if (route === "chat" && id.partner_id)
+    content = (
+      <ChatScreen
+        identity={id}
+        awayAfterMinutes={settings.away_after_minutes}
+        partnerPresence={partnerPresence}
+      />
+    );
   else if (route === "notifications" && id.partner_id)
     content = (
       <NotificationsScreen
@@ -722,6 +739,11 @@ export default function App() {
           detachNotifs();
           notifOffRef.current.push(attachNotifications((h) => socket.onEvent(h), settings, next.partner_name ?? null));
           notifOffRef.current.push(attachTrayPresence((h) => socket.onEvent(h)));
+          voice.configureSession({
+            deviceId: next.device_id,
+            deviceSecret: next.device_secret,
+            partnerId: next.partner_id!,
+          });
           voice.startAlwaysOn((next.device_id ?? "") < (next.partner_id ?? ""));
           messages.start(next.partner_id!, next);
           window.location.hash = "#/home";

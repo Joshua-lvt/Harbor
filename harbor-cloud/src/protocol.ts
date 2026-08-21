@@ -104,6 +104,21 @@ export interface PairResponse {
   partner_avatar: string | null;
 }
 
+/** POST /media-authorize — private server-to-server proof for a paired voice room. */
+export interface MediaAuthorizationRequest {
+  device_id: string;
+  device_secret: string;
+  partner_id: string;
+  room_id: string;
+}
+
+export interface MediaAuthorizationResponse {
+  authorized: true;
+  role: "peer";
+  partner_id: string;
+  pair_key: string;
+}
+
 /**
  * POST /profile — update display_name and/or public_key and/or avatar.
  *
@@ -131,6 +146,31 @@ export interface UnpairResponse {
   ok: true;
   /** The caller's freshly reissued pairing code (so they can pair with someone new). */
   pairing_code: string;
+}
+
+/** POST /mobile_code — mint a short-lived, single-use mobile-linking code on the caller. */
+export interface MobileCodeRequest {
+  device_id: string;
+  device_secret: string;
+}
+
+export interface MobileCodeResponse {
+  mobile_code: string;
+  /** Epoch seconds at which the code expires (the mobile should prompt to re-mint then). */
+  expires: number;
+}
+
+/** POST /connect_mobile — bind the caller (mobile) as a receive-only observer of a PC. */
+export interface ConnectMobileRequest {
+  device_id: string;
+  device_secret: string;
+  /** The PC's single-use mobile_linking code (from POST /mobile_code). */
+  mobile_code: string;
+}
+
+export interface ConnectMobileResponse {
+  /** The `device_id` of the PC the mobile is now observing. */
+  target_id: string;
 }
 
 /**

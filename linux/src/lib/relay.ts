@@ -157,17 +157,28 @@ export async function getPartner(id: Identity): Promise<PartnerInfo> {
   const now = Date.now();
   const hit = partnerCache.get(id.device_id);
   if (hit && now - hit.at < PARTNER_CACHE_TTL_MS) return hit.value;
-  const base = httpBase(id.relay_url).replace(/\/$/, "");
-  const url = `${base}/partner?device_id=${encodeURIComponent(id.device_id)}&secret=${encodeURIComponent(id.device_secret)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`relay /partner: ${res.status}`);
-  const value = (await res.json()) as PartnerInfo;
-  partnerCache.set(id.device_id, { at: now, value });
-  return value;
+  const pending = partnerRequests.get(id.device_id);
+  if (pending) return pending;
+  const request = (async () => {
+    const base = httpBase(id.relay_url).replace(/\/$/, "");
+    const url = `${base}/partner?device_id=${encodeURIComponent(id.device_id)}&secret=${encodeURIComponent(id.device_secret)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`relay /partner: ${res.status}`);
+    const value = (await res.json()) as PartnerInfo;
+    partnerCache.set(id.device_id, { at: Date.now(), value });
+    return value;
+  })();
+  partnerRequests.set(id.device_id, request);
+  try {
+    return await request;
+  } finally {
+    if (partnerRequests.get(id.device_id) === request) partnerRequests.delete(id.device_id);
+  }
 }
 
 /** In-memory /partner cache (see getPartner). */
 const partnerCache = new Map<string, { at: number; value: PartnerInfo }>();
+const partnerRequests = new Map<string, Promise<PartnerInfo>>();
 
 /** Drop the cached /partner result for a device. Called on unpair so a quick
  *  re-pair (or a post-unpair query within the 30s TTL) doesn't return the

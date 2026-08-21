@@ -1,6 +1,6 @@
 [package]
 name = "harbor-app"
-version = "1.0.3"
+version = "1.0.4"
 description = "Harbor — your digital safe harbor. A desktop presence app for couples."
 edition = "2021"
 rust-version = "1.77"
@@ -36,6 +36,10 @@ dirs = "5.0"
 # WebKitGTK media permission: auto-grant the microphone so getUserMedia isn't
 # denied by the default permission handler (the "call nunca funcionou" on Linux).
 webkit2gtk = "2.0"
+# Native capture is Linux-only. The crates link against the system GStreamer
+# installation through pkg-config; Windows/macOS/mobile builds never see them.
+gstreamer = "0.24"
+gstreamer-app = "0.24"
 
 [features]
 # Used by the Tauri CLI for production builds (custom protocol).

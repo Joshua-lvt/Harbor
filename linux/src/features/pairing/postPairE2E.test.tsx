@@ -50,7 +50,7 @@ import { pair, getMe, getPartner } from "../../lib/relay";
 import { loadIdentity, saveIdentity } from "../../lib/identity";
 import type { Identity, MeInfo, PartnerInfo, PairResponse } from "../../lib/types";
 
-const POLL_MS = 2500;
+const POLL_MS = 30_000;
 
 // Real X25519 keypairs generated once (real libsodium) — stand in for the keys
 // /register persisted to each device's store. genKeypair uses only to_base64 /

@@ -14,10 +14,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useChat } from "../../hooks/useChat";
 import { messages as messageStore } from "../../services/messages";
 import { usePresence } from "../../hooks/usePresence";
-import { loadSettings } from "../../lib/identity";
 import { fileToCompressedDataUrl } from "../../lib/image";
-import type { Identity, Settings } from "../../lib/types";
-import { DEFAULT_SETTINGS } from "../../lib/types";
+import type { Identity, PresenceState } from "../../lib/types";
 import { SharkMascot } from "../../assets/shark";
 import { Avatar } from "../../components/Avatar";
 import ChatBubble from "./ChatBubble";
@@ -35,10 +33,13 @@ function sameDay(a: number, b: number): boolean {
   );
 }
 
-export default function ChatScreen({ identity }: { identity: Identity }) {
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const { connected, messages, draft, partnerPresence, partnerTyping, onDraftChange, send } =
-    useChat(identity);
+export default function ChatScreen({ identity, awayAfterMinutes, partnerPresence }: {
+  identity: Identity;
+  awayAfterMinutes: number;
+  partnerPresence: PresenceState;
+}) {
+  const { connected, messages, draft, partnerPresence: livePartnerPresence, partnerTyping, onDraftChange, send } =
+    useChat(identity, partnerPresence);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [attachBusy, setAttachBusy] = useState(false);
@@ -59,10 +60,6 @@ export default function ChatScreen({ identity }: { identity: Identity }) {
     }
   }
 
-  useEffect(() => {
-    loadSettings().then(setSettings);
-  }, []);
-
   // Tell the app-lifetime receiver the user is looking at this conversation so
   // it can suppress the redundant "Nova mensagem recebida" OS toast (the live
   // bubble already landed inline). Route changes unmount ChatScreen, dropping
@@ -72,7 +69,7 @@ export default function ChatScreen({ identity }: { identity: Identity }) {
     return () => messageStore.setChatActive(false);
   }, []);
 
-  usePresence(settings.away_after_minutes, connected === "open");
+  usePresence(awayAfterMinutes, connected === "open");
 
   // Auto-scroll to the newest message / when the typing indicator appears.
   useEffect(() => {
@@ -81,9 +78,9 @@ export default function ChatScreen({ identity }: { identity: Identity }) {
   }, [messages, partnerTyping]);
 
   const presenceDot =
-    partnerPresence === "online" ? "dot-online" : partnerPresence === "away" ? "dot-away" : "dot-offline";
+    livePartnerPresence === "online" ? "dot-online" : livePartnerPresence === "away" ? "dot-away" : "dot-offline";
   const presenceLabel =
-    partnerPresence === "online" ? "Online" : partnerPresence === "away" ? "Ausente" : "Offline";
+    livePartnerPresence === "online" ? "Online" : livePartnerPresence === "away" ? "Ausente" : "Offline";
 
   // E2E security indicator — reflects whether BOTH sides have published keys so
   // messages are actually sealed on the wire. We have our own keypair + the

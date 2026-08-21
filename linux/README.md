@@ -9,6 +9,9 @@ Variante Linux nativa do Harbor. O frontend permanece wire-compatible com a vers
 - Node.js 18 ou mais recente e npm
 - GTK 3, WebKitGTK 4.1 e AppIndicator/StatusNotifier
 - PipeWire ou PulseAudio para chamadas WebRTC
+- GStreamer 1.24+ com `gstreamer`, `gstreamer-audio`, `gstreamer-video`, `gstreamer-app`, além dos plugins `good` e `bad` quando disponíveis
+- `pipewire`/`pipewire-pulse` para captura; em Wayland, um desktop portal com suporte de captura PipeWire
+- `ximagesrc` (plugin X) somente para o fallback explícito X11
 - `xdg-utils` para lookup de icones e abertura de recursos do desktop
 - Wayland e XWayland sao suportados; quando XWayland esta disponivel, o launcher prefere X11 para evitar falhas GBM do WebKitGTK em alguns compositores
 - GNOME/Mutter ou KDE fornecem a fonte D-Bus preferida para idle
@@ -50,6 +53,25 @@ O script de pacote aceita a lista de bundles:
 O pacote Debian foi validado localmente. O updater so gera artefatos assinados quando `TAURI_SIGNING_PRIVATE_KEY` estiver configurada no ambiente de release.
 
 Para AppImage, o Tauri chama `linuxdeploy`, `linuxdeploy-plugin-gtk` e `linuxdeploy-plugin-gstreamer`. O script cria aliases em `.tools/` quando as ferramentas do repositorio estao presentes. A copia antiga de `linuxdeploy` pode falhar ao aplicar `strip` em bibliotecas modernas com secoes ELF `RELR`; nesse caso use uma versao atual do linuxdeploy e mantenha o mesmo nome de executavel no PATH.
+
+### Ponte nativa de mídia
+
+A primeira fatia nativa está disponível pelos comandos Tauri `media_capabilities`,
+`media_start`, `media_stop`, `media_set_ptt` e `media_receive_signal`. Ela usa
+GStreamer com filas limitadas e emite `media_state`, `media_audio` e
+`media_video` para o WebView. O envelope de signaling continua sendo o mesmo
+`v: 1` (`offer`/`answer`/`ice`) e não contém credenciais.
+
+A engine WebRTC JavaScript continua sendo o fallback de produção enquanto
+`native_webrtc` for `false`; a integração `webrtc-rs` será habilitada somente
+após os testes de loopback e de peer JS. O WebView usa o mesmo transporte de
+signaling com Relay + Broadcast privado por sala e solicita TURN de curta
+validade; se a sessão de mídia não estiver disponível, permanece no Relay sem
+credenciais embutidas. Em Wayland, a captura de tela exige a
+sessão PipeWire selecionada pelo portal. X11 só é usado quando `DISPLAY` existe
+ou quando `HARBOR_FORCE_X11=1` foi definido explicitamente. O AppImage deve
+incluir os plugins GStreamer necessários, e a máquina alvo ainda precisa dos
+serviços PipeWire/portal do desktop.
 
 Para executar o binario release com a compatibilidade grafica padrao:
 

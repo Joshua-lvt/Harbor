@@ -18,8 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import { socket } from "../services/ws";
 import { asMs, insertOutgoing, loadMessages, type StoredRow } from "../lib/localDb";
-import { getPartner } from "../lib/relay";
-import { loadIdentity, saveIdentity } from "../lib/identity";
+import { loadIdentity } from "../lib/identity";
 import { sealTo } from "../lib/crypto";
 import { messages as messageStore } from "../services/messages";
 import type { Identity, PresenceState, ServerEvent, StoredMessage } from "../lib/types";
@@ -36,12 +35,12 @@ function rowToMessage(r: StoredRow): StoredMessage {
   };
 }
 
-export function useChat(identity: Identity) {
+export function useChat(identity: Identity, initialPartnerPresence: PresenceState = "offline") {
   const partnerId = identity.partner_id!;
   const [connected, setConnected] = useState(socket.getStatus());
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [partnerPresence, setPartnerPresence] = useState<PresenceState>("offline");
+  const [partnerPresence, setPartnerPresence] = useState<PresenceState>(initialPartnerPresence);
   const [partnerTyping, setPartnerTyping] = useState(false);
   const lastTypingSent = useRef(0);
   const stopTimer = useRef<number | null>(null);
@@ -68,7 +67,6 @@ export function useChat(identity: Identity) {
   useEffect(() => {
     let cancelled = false;
     loadMessages(partnerId).then((rows) => setMessages(rows.map(rowToMessage)));
-    socket.send({ type: "last_seen" });
     (async () => {
       const fresh = await loadIdentity();
       if (cancelled || !fresh) return;
@@ -77,25 +75,6 @@ export function useChat(identity: Identity) {
         device_pubkey: fresh.device_pubkey ?? null,
         partner_pubkey: fresh.partner_pubkey ?? null,
       };
-      try {
-        const p = await getPartner(fresh);
-        if (cancelled) return;
-        setPartnerPresence(p.presence as PresenceState);
-        const partnerPub = p.partner_public_key ?? null;
-        const partnerAvatar = p.partner_avatar ?? null;
-        if (partnerPub !== keysRef.current.partner_pubkey) {
-          keysRef.current.partner_pubkey = partnerPub;
-          // The receive side decrypts with OUR keypair (not the partner's
-          // pubkey, which only the sender uses), so a partner re-key discovered
-          // here doesn't need to reach the messages singleton.
-        }
-        if (partnerPub !== fresh.partner_pubkey || partnerAvatar !== (fresh.partner_avatar ?? null)) {
-          await saveIdentity({ ...fresh, partner_pubkey: partnerPub, partner_avatar: partnerAvatar });
-        }
-      } catch {
-        // Relay unreachable — keep the cached keys + avatar. The chat still
-        // works: E2E with cached keys, or plaintext fallback if keys are absent.
-      }
     })();
     const offStatus = socket.onStatus(setConnected);
     // Received chat/ack is processed app-lifetime by the `messages` singleton
@@ -127,6 +106,10 @@ export function useChat(identity: Identity) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId]);
+
+  useEffect(() => {
+    setPartnerPresence(initialPartnerPresence);
+  }, [initialPartnerPresence]);
 
   function sendTyping(state: "start" | "stop") {
     const now = Date.now();

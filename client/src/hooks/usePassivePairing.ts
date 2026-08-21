@@ -42,7 +42,7 @@ import type { Identity } from "../lib/types";
 
 /** Polling interval — every 2.5s. Deliberately not tight: the partner pasting
  *  our code and us noticing a few seconds later is an invisible delay. */
-const POLL_MS = 2500;
+const POLL_MS = 30_000;
 
 /** Apply a partner link to an identity: partner id + their published name,
  *  X25519 public key, and avatar (the `?? null` guards preserve the nullable
@@ -93,9 +93,11 @@ export function usePassivePairing(opts: {
   useEffect(() => {
     if (!hasSecret) return;
     let stopped = false;
+    let inFlight = false;
 
     const tick = async () => {
-      if (stopped || pairingRef.current) return; // a pairing is mid-flight — don't race
+      if (stopped || document.visibilityState !== "visible" || pairingRef.current || inFlight) return;
+      inFlight = true;
       const cred = credRef.current;
       let me: { partner_id: string | null };
       try {
@@ -103,10 +105,17 @@ export function usePassivePairing(opts: {
       } catch {
         // Transient network/relay error: swallow. Don't surface a per-failure
         // status and don't leave the pairing screen — the next tick retries.
+        inFlight = false;
         return;
       }
-      if (stopped || pairingRef.current) return; // active path may have won while we awaited
-      if (!me.partner_id) return; // still waiting
+      if (stopped || pairingRef.current) {
+        inFlight = false;
+        return;
+      }
+      if (!me.partner_id) {
+        inFlight = false;
+        return;
+      }
 
       pairingRef.current = true; // acquire — synchronous, before the next await
       let partner;
@@ -116,9 +125,13 @@ export function usePassivePairing(opts: {
         // fetch failed: release so the active path or a later tick can still
         // succeed. Don't strand the user on a phantom lock.
         pairingRef.current = false;
+        inFlight = false;
         return;
       }
-      if (stopped) return; // unmounted mid-fetch
+      if (stopped) {
+        inFlight = false;
+        return;
+      }
       // Read the persisted identity fresh from the store — NOT credRef.current.
       // The credentialed identity (prop + live secret) never received the
       // X25519 keypair that /register persisted (register stores it but doesn't
@@ -148,15 +161,22 @@ export function usePassivePairing(opts: {
         await saveIdentity(retired);
       } catch {
         pairingRef.current = false; // persist failed: release, don't strand
+        inFlight = false;
         return;
       }
       if (!stopped) onPairedRef.current(retired);
+      inFlight = false;
     };
 
     const h = window.setInterval(tick, POLL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       stopped = true;
       clearInterval(h);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
     // Only the credential-gate boolean + the stable ref object are deps; the
     // latest identity/callback reach the timer through refs.

@@ -658,6 +658,48 @@ describe("unpair pushes {type:unpaired} to the live ex-partner", () => {
   });
 });
 
+describe("presence reconnect preserves away — no online flap", () => {
+  it("B away + reconnect re-broadcasts away, NOT online (root-cause fix)", async () => {
+    const { aid, bid, aSec, bSec, pk } = await makePair();
+    const wa = await openWs(aid, aSec);
+    const wb = await openWs(bid, bSec);
+    await drain(wa, 300); // B's connect-time online ping to A
+
+    // B reports itself away (client-side idle threshold crossed). Server stores
+    // + forwards away to A, and must remember it across a later reconnect.
+    wb.send(JSON.stringify({ type: "presence", state: "away" }));
+    const away = await recvJson(wa, 1000);
+    expect(away.type).toBe("presence");
+    expect(away.state).toBe("away");
+    expect(away.device_id).toBe(bid);
+
+    // A transient socket drop (network blip / DO hibernate) + reconnect within
+    // the grace window. Before the fix the connect handler hard-coded
+    // last_presence='online' and broadcast online to A, so the partner's dot
+    // flapped online→away on every dropped-and-reopened socket — especially when
+    // the user was away. Now the stored 'away' is preserved and re-announced.
+    wb.close();
+    const wb2 = await openWs(bid, bSec);
+    const aMsgs = await drain(wa, 400);
+    const reconnectPres = aMsgs.find((m) => m.type === "presence");
+    expect(reconnectPres).toBeTruthy();
+    expect(reconnectPres?.state).toBe("away");
+    expect(reconnectPres?.device_id).toBe(bid);
+
+    // The /partner RPC (queried from A) also reads B as away, not the flapped
+    // 'online' — the stored presence stayed consistent at rest.
+    const partner = await get(`/partner?device_id=${aid}&secret=${aSec}`);
+    expect(partner.body.presence).toBe("away");
+
+    // Grace was cleared by the reconnect, so a stale alarm fires nothing.
+    await runDurableObjectAlarm(pairStub(pk));
+    await assertNoMessage(wa, 400);
+
+    wb2.close();
+    wa.close();
+  });
+});
+
 /* ─────────────────────── small local helpers ─────────────────────── */
 
 // (helpers folded into the buffer layer above; this section kept for future

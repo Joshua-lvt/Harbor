@@ -39,6 +39,21 @@ Duas classes de **Durable Object** com SQLite + um roteador **Worker**.
   estado por-conexão. CORS é permissivo (o FastAPI permitia tudo; o origin do
   WebView do cliente Tauri varia).
 
+### Autorização de mídia
+
+`POST /media-authorize` é uma rota privada, usada somente pela Edge Function
+`media-session`. Ela exige `Authorization: Bearer <HARBOR_MEDIA_AUTH_TOKEN>`,
+confere o `device_secret` no Registry e aceita apenas os dois dispositivos já
+pareados para o `room_id` determinístico. O valor deve ser configurado como
+secret no Worker e, com o mesmo valor, em `HARBOR_MEDIA_AUTH_TOKEN` do Supabase;
+nunca o coloque em `wrangler.jsonc`, no cliente ou em logs:
+
+```sh
+npx wrangler secret put HARBOR_MEDIA_AUTH_TOKEN
+```
+
+Sem esse secret, a rota permanece desabilitada e retorna `503`.
+
 Arquivos: `src/protocol.ts` (unões do wire + `validateClientMessage` — a fonte
 única da verdade dos formatos), `src/util.ts` (helpers de code/secret/pair-key
 portados de `server/app/security.py` + `pairing.py`).
@@ -50,8 +65,10 @@ libsodium `crypto_box_seal` (X25519 + XSalsa20-Poly1305); o Worker/DOs só
 roteiam metadados + chaves públicas + texto cifrado opaco em base64 `enc` e
 **nunca descriptografam**. Chaves privadas nunca saem do cliente
 (`identity.json`). O `device_secret` é dado por-dispositivo na SQLite do DO
-Registry, não um secret de deploy — o `wrangler` **não precisa de secrets**. O
-áudio fica P2P (`voice_signal` é só sinalização; sem SFU/relay/processamento).
+Registry. A rota de autorização de mídia também exige o secret de deploy
+`HARBOR_MEDIA_AUTH_TOKEN`, usado apenas na autenticação server-to-server e
+nunca exposto ao cliente. O áudio fica P2P (`voice_signal` é só sinalização;
+sem SFU/relay/processamento).
 
 ## Desenvolver
 
@@ -85,9 +102,11 @@ resetado por caso via `reset()` do `cloudflare:test`.
   chat + `ack` + buffer offline + flush na reconexão + late-ack, sinalização de
   voz, atividade/typing, frames malformados/oversized (socket sobrevive),
   conexão duplicada (4409), `last_seen`, push de unpair, heartbeat.
+- `test/mediaAuth.test.ts` — prova de autorização apenas para pares e rota
+  desabilitada enquanto o secret interno não está configurado.
 
 ```sh
-npm run test:run   # 3 arquivos, 62 testes — todos verdes
+npm run test:run   # todos os arquivos, todos os testes — todos verdes
 ```
 
 ## Deploy

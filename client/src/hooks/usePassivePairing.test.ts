@@ -27,7 +27,7 @@ import { getMe, getPartner } from "../lib/relay";
 import { loadIdentity, saveIdentity } from "../lib/identity";
 import type { Identity, MeInfo, PartnerInfo } from "../lib/types";
 
-const POLL_MS = 2500;
+const POLL_MS = 30_000;
 
 function credentialed(secret: string): Identity {
   return {

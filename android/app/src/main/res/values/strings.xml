@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Harbor Mobile</string>
+    <string name="notification_channel_name">Harbor connection</string>
+    <string name="notification_channel_description">Shows the connected Harbor PC presence and activity</string>
+</resources>

@@ -21,13 +21,10 @@ import { Clock, Gamepad2, MessageSquare } from "lucide-react";
 import { socket } from "../../services/ws";
 import { usePresence } from "../../hooks/usePresence";
 import { useTimeTogether, togetherLabel } from "../../hooks/useTimeTogether";
-import { loadSettings } from "../../lib/identity";
-import { getPartner } from "../../lib/relay";
 import { loadMessages } from "../../lib/localDb";
 import { detectGame, friendlyName } from "../../lib/appNames";
 import { useAppIcon, GeneratedAppIcon, getAppIcon } from "../../lib/appIconCache";
-import type { Identity, PresenceState, ServerEvent, Settings } from "../../lib/types";
-import { DEFAULT_SETTINGS } from "../../lib/types";
+import type { Identity, PresenceState, ServerEvent } from "../../lib/types";
 import OceanBackground from "./OceanBackground";
 import Sidebar from "./Sidebar";
 import PartnerHeroCard from "./PartnerHeroCard";
@@ -52,6 +49,8 @@ export default function HomeScreen({
   myActivity,
   myActivityPath,
   shareActivity,
+  awayAfterMinutes,
+  partnerPresence,
 }: {
   identity: Identity;
   partnerActivity: string | null;
@@ -60,19 +59,21 @@ export default function HomeScreen({
    *  its OWN icon once per exe (Feature 4). The receiver side never needs it. */
   myActivityPath: string | null;
   shareActivity: boolean;
+  awayAfterMinutes: number;
+  partnerPresence: PresenceState;
 }) {
   const partnerId = identity.partner_id!;
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [presence, setPresence] = useState<PresenceState>("offline");
+  const [presence, setPresence] = useState<PresenceState>(partnerPresence);
   const [connected, setConnected] = useState(socket.getStatus());
   const [now, setNow] = useState(Date.now());
   const [lastMsgAt, setLastMsgAt] = useState<number | null>(null);
   const [hash, setHash] = useState(typeof window !== "undefined" ? window.location.hash : "#/home");
 
+  usePresence(awayAfterMinutes, connected === "open");
+
   useEffect(() => {
-    loadSettings().then(setSettings);
-  }, []);
-  usePresence(settings.away_after_minutes, connected === "open");
+    setPresence(partnerPresence);
+  }, [partnerPresence]);
 
   // Feature 4 — warm MY OWN foreground icon from the full path so the Sidebar's
   // "Você:" badge (`useAppIcon(myActivity)`, cache-only) renders the real icon
@@ -90,14 +91,8 @@ export default function HomeScreen({
   // together.
   const togetherSeconds = useTimeTogether(connected === "open", presence);
 
-  // Presence + last_seen, seeded from REST and kept live over the socket.
+  // Presence is owned by App and arrives through the app-lifetime socket.
   useEffect(() => {
-    socket.send({ type: "last_seen" });
-    getPartner(identity)
-      .then((p) => {
-        setPresence(p.presence as PresenceState);
-      })
-      .catch(() => {});
     const offStatus = socket.onStatus(setConnected);
     const offEvent = socket.onEvent((e: ServerEvent) => {
       if (e.type === "presence") {
@@ -111,7 +106,7 @@ export default function HomeScreen({
       offEvent();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  }, []);
 
   // Last local message timestamp — for the "Última interação" card. Reloaded on
   // mount (and would refresh on a future socket ack if we subscribed; the
