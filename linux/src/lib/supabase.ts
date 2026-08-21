@@ -7,14 +7,17 @@
  * storage (the current behavior). No network call is ever on the critical path.
  *
  * Auth model: the anon (publishable) key + Row-Level Security. The `settings`
- * table is keyed by `device_id`; RLS policies (see supabase/schema.sql) let a
- * device read/write only its own row. The anon key is public by design — it is
- * NOT a secret; the RLS policies are what protect the data.
+ * table is keyed by a `scope` — a stable key shared by BOTH devices in a pair
+ * (derived from the two device_ids, sorted), so settings sync across the two
+ * paired devices. RLS policies (see supabase/schema.sql) read the `X-Scope`
+ * header the client sends and allow a device to read/write only its own scope.
+ * The anon key is public by design — it is NOT a secret; the RLS policies are
+ * what protect the data.
  *
  * We use plain `fetch` to the PostgREST REST API instead of the `@supabase/supabase-js`
  * package — one less dependency, smaller bundle, and the surface we need is tiny.
  */
-import type { Settings } from "./types";
+import type { Identity, Settings } from "./types";
 
 export const SUPABASE_URL = "https://ujtjnmaplgmhnxiohotz.supabase.co";
 /** Publishable (anon) key — public by design, paired with RLS. */
@@ -24,79 +27,95 @@ export const SUPABASE_ANON_KEY = "sb_publishable_nCAy_f1fXzo5GeeX4qgOUw_cL3ZejTQ
  *  single switch so a future build can disable it without touching call sites. */
 export const SUPABASE_ENABLED = true;
 
+/**
+ * Compute the settings sync scope for an identity.
+ *
+ *  - Paired: a stable key shared by BOTH devices in the pair, derived from the
+ *    two device_ids (sorted). Both devices know their own device_id and their
+ *    partner's (partner_id), so they compute the SAME scope → settings sync
+ *    across the two paired devices (the "cross-device sync" goal).
+ *  - Unpaired: the device's own id (per-device, no sync).
+ */
+export function settingsScope(id: Pick<Identity, "device_id" | "partner_id">): string {
+  if (id.partner_id) {
+    const [a, b] = [id.device_id, id.partner_id].sort();
+    return `pair:${a}:${b}`;
+  }
+  return `dev:${id.device_id}`;
+}
+
 async function supabaseFetch(
   path: string,
   init: RequestInit = {},
-  deviceId?: string,
+  scope?: string,
 ): Promise<Response> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...init,
     headers: {
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  "Content-Type": "application/json",
-
-  ...(deviceId ? { "X-Device-Id": deviceId } : {}),
-
-  ...(init.headers ?? {}),
-},
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+      // RLS reads this header to allow access to the row for this scope.
+      ...(scope ? { "X-Scope": scope } : {}),
+      ...(init.headers ?? {}),
+    },
   });
   if (!res.ok) throw new Error(`supabase ${path}: ${res.status}`);
   return res;
 }
 
-/** Load the settings row for a device. Returns null if none exists yet. */
+/** Load the settings row for a scope. Returns null if none exists yet. */
 export async function loadRemoteSettings(
-  deviceId: string,
+  scope: string,
 ): Promise<Partial<Settings> | null> {
   if (!SUPABASE_ENABLED) return null;
   const res = await supabaseFetch(
-  `/settings?device_id=eq.${encodeURIComponent(deviceId)}&select=settings`,
-  {},
-  deviceId,
-);
+    `/settings?scope=eq.${encodeURIComponent(scope)}&select=settings`,
+    {},
+    scope,
+  );
   const rows = (await res.json()) as Array<{ settings: Partial<Settings> }>;
   return rows[0]?.settings ?? null;
 }
 
-/** Upsert the settings row for a device (insert or replace on device_id). */
+/** Upsert the settings row for a scope (insert or replace on scope). */
 export async function saveRemoteSettings(
-  deviceId: string,
+  scope: string,
   settings: Settings,
 ): Promise<void> {
   if (!SUPABASE_ENABLED) return;
   await supabaseFetch(
-  "/settings",
-  {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify({
-      device_id: deviceId,
-      settings,
-      updated_at: new Date().toISOString(),
-    }),
-  },
-  deviceId,
-);
+    "/settings",
+    {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({
+        scope,
+        settings,
+        updated_at: new Date().toISOString(),
+      }),
+    },
+    scope,
+  );
 }
 
 /** Best-effort push of local settings to Supabase. Never throws to the caller —
  *  a failure is swallowed (the app keeps working on local storage). */
-export function syncSettingsToRemote(deviceId: string, settings: Settings): void {
-  if (!SUPABASE_ENABLED || !deviceId) return;
-  void saveRemoteSettings(deviceId, settings).catch(() => {});
+export function syncSettingsToRemote(scope: string, settings: Settings): void {
+  if (!SUPABASE_ENABLED || !scope) return;
+  void saveRemoteSettings(scope, settings).catch(() => {});
 }
 
 /** Best-effort merge of remote settings into local. Returns the merged settings
  *  (remote wins on defined keys) or the local ones if the remote is unavailable
  *  or has no row. Never throws. */
 export async function mergeRemoteSettings(
-  deviceId: string,
+  scope: string,
   local: Settings,
 ): Promise<Settings> {
-  if (!SUPABASE_ENABLED || !deviceId) return local;
+  if (!SUPABASE_ENABLED || !scope) return local;
   try {
-    const remote = await loadRemoteSettings(deviceId);
+    const remote = await loadRemoteSettings(scope);
     if (!remote) return local;
     return { ...local, ...remote };
   } catch {

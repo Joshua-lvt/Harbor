@@ -169,6 +169,13 @@ export async function getPartner(id: Identity): Promise<PartnerInfo> {
 /** In-memory /partner cache (see getPartner). */
 const partnerCache = new Map<string, { at: number; value: PartnerInfo }>();
 
+/** Drop the cached /partner result for a device. Called on unpair so a quick
+ *  re-pair (or a post-unpair query within the 30s TTL) doesn't return the
+ *  previous partner's stale data. */
+export function clearPartnerCache(deviceId: string): void {
+  partnerCache.delete(deviceId);
+}
+
 /** Fetch my own state (pairing code, partner link, display name) — used at
  *  cold start: if /partner 404s, the partner unpaired us while we were offline,
  *  so we resync our pairing_code from here and return to the pairing screen. */

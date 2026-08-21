@@ -17,7 +17,7 @@ import NotificationsScreen from "./features/notifications/NotificationsScreen";
 import PersonalizationScreen from "./features/personalization/PersonalizationScreen";
 import { applyCustomization, customizationOf } from "./lib/customization";
 import { ensureIdentity, loadIdentity, loadSettings, saveIdentity, saveSettings } from "./lib/identity";
-import { mergeRemoteSettings, syncSettingsToRemote } from "./lib/supabase";
+import { mergeRemoteSettings, settingsScope, syncSettingsToRemote } from "./lib/supabase";
 import { genKeypair } from "./lib/crypto";
 import { socket } from "./services/ws";
 import { attachNotifications } from "./services/notify";
@@ -26,8 +26,9 @@ import { setAutostart } from "./services/autostart";
 import { useActivity } from "./hooks/useActivity";
 import { useToast } from "./components/Toaster";
 import { detectGame } from "./lib/appNames";
-import { getMe, getPartner, setProfile, unpair as relayUnpair, type PartnerInfo } from "./lib/relay";
+import { clearPartnerCache, getMe, getPartner, setProfile, unpair as relayUnpair, type PartnerInfo } from "./lib/relay";
 import { clearAllMessages } from "./lib/localDb";
+import { resetClockOffset } from "./lib/clockOffset";
 import { ActivityTracker } from "./lib/activityDerivation";
 import { clearActivityHistory } from "./lib/activityHistory";
 import { storePartnerIcon, peekIcon } from "./lib/appIconCache";
@@ -76,7 +77,7 @@ export default function App() {
   // and the app keeps working on local storage.
   const handleSettingsChange = (next: Settings) => {
     setSettings(next);
-    if (id?.device_id) syncSettingsToRemote(id.device_id, next);
+    if (id?.device_id) syncSettingsToRemote(settingsScope(id), next);
   };
   // Socket status drives the outbound-activity broadcaster (`useActivity`) so
   // my foreground app only sends when actually connected. App-lifetime state.
@@ -176,6 +177,8 @@ export default function App() {
     voice.stopAlwaysOn(); // tear down the always-on call + release the mic
     messages.stop(); // stop persisting chat for the ex-partner (before the wipe)
     detachNotifs(); // drop the notification/tray subscribers for the ex-partner
+    clearPartnerCache(current.device_id); // drop the cached partner profile/icon
+    resetClockOffset(); // drop the sampled clock offset (fresh session on re-pair)
     await saveIdentity(next);
     await clearAllMessages(); // fresh slate — don't show an ex's history
     await clearActivityHistory(); // Feature 3: wipe the ex's activity history
@@ -211,7 +214,7 @@ export default function App() {
       // Best-effort: merge settings persisted in Supabase (cross-device sync).
       // Non-blocking — if Supabase is unreachable/unconfigured, local wins.
       if (existing?.device_id) {
-        const merged = await mergeRemoteSettings(existing.device_id, s);
+        const merged = await mergeRemoteSettings(settingsScope(existing), s);
         if (!cancelled) setSettings(merged);
       }
       if (existing?.partner_id && existing?.device_secret) {
@@ -615,7 +618,7 @@ export default function App() {
     return () => off?.();
   }, []);
 
-    if (bootError) {
+  if (bootError) {
     return (
       <div className="window-main flex h-screen flex-col items-center justify-center px-6 text-center">
         <h1 className="text-2xl font-semibold" style={{ color: "var(--color-harbor-ink)" }}>

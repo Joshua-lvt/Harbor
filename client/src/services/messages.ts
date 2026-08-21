@@ -23,7 +23,8 @@
  */
 import { socket } from "./ws";
 import { openFrom } from "../lib/crypto";
-import { asMs, insertIncoming, markDelivered } from "../lib/localDb";
+import { insertIncoming, markDelivered } from "../lib/localDb";
+import { correctServerTs, resetClockOffset, sampleClockOffset } from "../lib/clockOffset";
 import { notificationQueue } from "./notificationQueue";
 import { notify } from "./notify";
 import { notificationStore } from "./notificationStore";
@@ -34,18 +35,9 @@ import type { Identity, ServerEvent, StoredMessage } from "../lib/types";
  *  the notification queue (mirrors useChat). */
 const PLAINTEXT_NOTIF_TAG = "harbor_notify:";
 
-/**
- * Clock offset between the relay's wall clock and ours, in ms. The relay stamps
- * every `chat` event with `ts` in SECONDS of ITS wall clock; our own outgoing
- * messages are stamped with `Date.now()` (ms) of OUR clock. If the two clocks
- * differ, a raw server `ts` would place received messages "in the past" (or
- * future) relative to our own — the bug where messages arriving while the chat
- * was closed sorted above/older than they should. We sample the offset from the
- * first received message of a session and reuse it, so received timestamps are
- * corrected to our clock while preserving the server's relative ordering (a
- * burst of buffered messages keeps its spacing). Null = not yet sampled.
- */
-let clockOffsetMs: number | null = null;
+// Clock-offset correction for server timestamps lives in lib/clockOffset.ts
+// (shared with notify.ts so chat + presence write to the notification history
+// on the same clock). See that module for the rationale.
 
 // Placeholder bubbles for the receive-side decrypt-failure paths. An encrypted
 // message must NEVER be silently dropped — the user sees something arrived that
@@ -119,7 +111,7 @@ class MessageStore {
     this.devicePubkey = null;
     this.chatActive = false;
     // A new pairing re-samples the clock offset on its first received message.
-    clockOffsetMs = null;
+    resetClockOffset();
   }
 
   /** Mark whether the ChatScreen is currently mounted (the user is actively
@@ -180,10 +172,9 @@ class MessageStore {
   private async onChat(e: Extract<ServerEvent, { type: "chat" }>): Promise<void> {
     if (!this.partnerId) return; // stopped / not paired
     // Sample the clock offset from the server's timestamp so received messages
-    // sort consistently with our local outgoing ones (see `clockOffsetMs`).
-    const serverMs = asMs(e.ts);
-    if (clockOffsetMs === null) clockOffsetMs = Date.now() - serverMs;
-    const createdAt = serverMs + clockOffsetMs;
+    // sort consistently with our local outgoing ones (see lib/clockOffset.ts).
+    sampleClockOffset(e.ts);
+    const createdAt = correctServerTs(e.ts);
     // The wire envelope is one of two mutually-exclusive shapes (see types.ts):
     // an opaque `enc` sealed-box string (E2E) or a plaintext `text` (+optional
     // `image`) for scripts / pre-E2E partners / a partner that hasn't published a

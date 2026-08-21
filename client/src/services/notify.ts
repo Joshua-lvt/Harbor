@@ -10,7 +10,7 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { asMs } from "../lib/localDb";
+import { correctServerTs } from "../lib/clockOffset";
 import { notificationStore } from "./notificationStore";
 import type { Settings } from "../lib/types";
 
@@ -72,9 +72,10 @@ export function attachNotifications(
   // client re-asserts its own presence on every onopen). Undefined = "never
   // seen", so the very first `online` after app start still fires.
   let lastPresence: "online" | "away" | "offline" | undefined;
-  // Debounce timer for the presence toast (see PRESENCE_GRACE_MS).
+  // Debounce timer for the presence toast + history (see PRESENCE_GRACE_MS).
   let pendingTimer: number | null = null;
   let pendingState: "online" | "away" | "offline" | null = null;
+  let pendingTs = 0;
 
   function firePresence(state: "online" | "away" | "offline"): void {
     if (state === "online") notify("💙 Harbor", `${name} ficou online.`, s, "notify_on_online");
@@ -87,35 +88,39 @@ export function attachNotifications(
     if (e.type !== "presence") return;
     if (e.state === lastPresence) return; // dedup — only notify on a change
     lastPresence = e.state;
-    // Record to the in-app Harbor notification history (Bug 4) regardless of
-    // focus — the Notifications tab always shows the presence trail.
-    void notificationStore.add({
-      id: `presence-${e.device_id}-${e.ts}`,
-      kind: "presence",
-      title: name,
-      body:
-        e.state === "online"
-          ? "Ficou online."
-          : e.state === "away"
-            ? "Ficou ausente."
-            : "Ficou offline.",
-      icon: e.state === "online" ? "💙" : e.state === "away" ? "🌙" : "⚫",
-      timestamp: asMs(e.ts),
-    });
-    // Debounce the toast: only fire if the state persists for the grace window.
-    // A transient flip (reconnect echo, idle jitter) cancels the pending toast.
+    // Debounce BOTH the toast AND the history entry: only record a presence
+    // change if it persists for the grace window. A transient flip (reconnect
+    // echo, idle jitter) that never becomes a real transition is cancelled
+    // here, so the Notifications tab doesn't fill with "online/ausente"
+    // flapping that the user never actually saw.
     if (pendingTimer != null) clearTimeout(pendingTimer);
     pendingState = e.state;
+    pendingTs = e.ts;
     pendingTimer = window.setTimeout(() => {
       pendingTimer = null;
       if (pendingState == null) return;
+      const state = pendingState;
+      // Record to the in-app Harbor notification history (Bug 4) — only now,
+      // after the state has persisted.
+      void notificationStore.add({
+        id: `presence-${e.device_id}-${pendingTs}`,
+        kind: "presence",
+        title: name,
+        body:
+          state === "online"
+            ? "Ficou online."
+            : state === "away"
+              ? "Ficou ausente."
+              : "Ficou offline.",
+        icon: state === "online" ? "💙" : state === "away" ? "🌙" : "⚫",
+        timestamp: correctServerTs(pendingTs),
+      });
       // Always fire the OS notification (when the toggle is on). The old code
       // gated on document.hasFocus() to show an in-app toast instead when the
       // app was "focused" — but on Linux a close-to-tray app reports focus even
       // in the background, so the OS notification NEVER fired (only the in-app
-      // one). The in-app notification HISTORY (Notifications tab) is recorded
-      // above regardless; the OS toast is the alert the user actually wants.
-      firePresence(pendingState);
+      // one).
+      firePresence(state);
     }, PRESENCE_GRACE_MS);
   });
 }

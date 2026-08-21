@@ -282,6 +282,9 @@ class VoiceManager {
     this.clearRetry();
     this.clearConnectingTimer();
     this.stopScreenShare();
+    // Record the final call metrics session (the user stopped the call). No-op
+    // if no call was ever connected.
+    this.recordCallEnd();
     this.teardownPC();
     this.releaseMic();
     // Stopped: distinct from reconnecting — no socket, no retry, no mic. The
@@ -411,25 +414,25 @@ class VoiceManager {
     this.negotiate();
   }
 
-  /** Re-negotiate after adding/removing a track. The offerer re-offers; the
-   *  responder waits for the offerer's next offer (the offerer is the one who
-   *  typically shares, but either side can — the smaller-id offerer drives
-   *  negotiation). */
+  /** Re-negotiate after adding/removing a track. EITHER side can share, so
+   *  either side can be the one that needs to offer — the old code only offered
+   *  when `isOfferer`, so a responder sharing its screen never reached the
+   *  partner (the "screen-share do responder nunca chega" bug). We offer
+   *  whenever a local track changed, guarded by `signalingState === "stable"`
+   *  to avoid glare (if we're already mid-negotiation, the in-flight offer/
+   *  answer covers the change). */
   private negotiate(): void {
     if (!this.pc || !this.running) return;
-    if (this.isOfferer) {
-      void (async () => {
-        try {
-          const offer = await this.pc!.createOffer();
-          await this.pc!.setLocalDescription(offer);
-          this.sendSignal("offer", offer);
-        } catch {
-          // ignore — the retry loop will re-offer
-        }
-      })();
-    }
-    // Responder: nothing to send; the offerer's next offer (triggered by their
-    // own track change) carries the renegotiation.
+    if (this.pc.signalingState !== "stable") return;
+    void (async () => {
+      try {
+        const offer = await this.pc!.createOffer();
+        await this.pc!.setLocalDescription(offer);
+        this.sendSignal("offer", offer);
+      } catch {
+        // ignore — the retry loop will re-offer
+      }
+    })();
   }
 
   // --- call metrics --------------------------------------------------------
@@ -563,23 +566,31 @@ class VoiceManager {
     else if (kind === "ice") await this.onIce(data as RTCIceCandidateInit);
   }
 
-  /** Inbound offer → auto-answer (the offerer opened the call). Only while the
-   *  responder is `reconnecting` — a retry offer racing an in-flight negotiation
-   *  is dropped; the in-flight one either completes or times out, and the next
-   *  retry is picked up after we fall back to `reconnecting`. Also refuses to
-   *  prompt for the mic without a gesture: no localStream → needs_permission. */
+  /** Inbound offer → auto-answer. Handles BOTH the initial call setup (while
+   *  `reconnecting`) and a renegotiation offer (while `connected`, e.g. the
+   *  partner started/stopped sharing their screen). A retry offer racing an
+   *  in-flight negotiation is dropped; the in-flight one either completes or
+   *  times out, and the next retry is picked up after we fall back to
+   *  `reconnecting`. Also refuses to prompt for the mic without a gesture: no
+   *  localStream → needs_permission. */
   private async onOffer(offer: RTCSessionDescriptionInit): Promise<void> {
     if (!this.running) return;
-    if (this.state.status !== "reconnecting") return;
     if (!this.localStream) {
       this.set({ status: "needs_permission" });
       return;
     }
-    this.set({ status: "connecting", error: null, partnerSpeaking: false });
-    // createPC returns false (and sets a clear failed state) if WebRTC is
-    // unavailable — don't proceed to a null PC.
-    if (!this.createPC()) return;
-    this.startConnectingTimer();
+    const isInitial = this.state.status === "reconnecting";
+    if (!isInitial && this.state.status !== "connected") return;
+    // Glare: if we're already offering (have-local-offer), drop the inbound
+    // offer — the in-flight one will be answered by the peer.
+    if (this.pc?.signalingState === "have-local-offer") return;
+    if (isInitial) {
+      this.set({ status: "connecting", error: null, partnerSpeaking: false });
+      // createPC returns false (and sets a clear failed state) if WebRTC is
+      // unavailable — don't proceed to a null PC.
+      if (!this.createPC()) return;
+      this.startConnectingTimer();
+    }
     try {
       await this.pc!.setRemoteDescription(offer);
       // Flush any ICE candidates that arrived while we were processing the
@@ -590,10 +601,13 @@ class VoiceManager {
       await this.pc!.setLocalDescription(answer);
       this.sendSignal("answer", answer);
     } catch {
-      this.clearConnectingTimer();
-      this.teardownPC();
-      this.set({ status: "reconnecting" });
-      this.scheduleRetry();
+      if (isInitial) {
+        this.clearConnectingTimer();
+        this.teardownPC();
+        this.set({ status: "reconnecting" });
+        this.scheduleRetry();
+      }
+      // On a renegotiation failure, keep the existing call alive.
     }
   }
 
@@ -721,9 +735,11 @@ class VoiceManager {
       ) {
         // Peer left (or the link dropped for good) — back to reconnecting; the
         // offerer's retry loop (or an inbound offer, on the responder) lifts us
-        // back up without any user action.
+        // back up without any user action. The call METRICS session stays open
+        // across reconnects (we only increment the reconnect counter here) so
+        // an unstable call is recorded as ONE call with N reconnects, not N
+        // tiny failed calls — the data that decides "do I need a second TURN".
         this.callReconnects += 1;
-        this.recordCallEnd();
         this.teardownPC();
         this.setPtt(false);
         this.set({ status: "reconnecting", partnerSpeaking: false });
@@ -977,8 +993,10 @@ class VoiceManager {
   private teardownPC(): void {
     this.stopPTT();
     this.stopSpeakingDetect();
-    // Close out any in-progress call metrics session (no-op if none).
-    this.recordCallEnd();
+    // NOTE: we do NOT record the call metrics session here — teardownPC runs on
+    // every reconnect, and the session must span the whole call (see
+    // onconnectionstatechange). The session is closed only on a real end:
+    // stopAlwaysOn (user stopped) or a `failed` connection (gave up).
     this.pc?.close();
     this.pc = null;
     this.remoteStream = null;
