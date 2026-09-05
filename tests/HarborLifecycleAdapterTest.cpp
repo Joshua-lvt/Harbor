@@ -43,10 +43,25 @@ void HarborLifecycleAdapterTest::autostartEntryFollowsTheStoredPreference()
 
     QDir(configHome).removeRecursively();
 #else
+    // Windows writes a Startup-folder shortcut instead of a desktop entry;
+    // APPDATA is redirected so the test never touches the real profile.
+    const QString appData = QDir::tempPath() + QStringLiteral("/harbor-lifecycle-%1")
+                                                  .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    QVERIFY(QDir().mkpath(appData));
+    qputenv("APPDATA", appData.toUtf8());
+
     HarborAutostart autostart;
-    QVERIFY(!HarborAutostart::supported());
-    QVERIFY(!autostart.setEnabled(true));
-    QCOMPARE(autostart.enabled(), false);
+    QVERIFY(HarborAutostart::supported());
+    QVERIFY(!autostart.enabled());
+
+    QVERIFY(autostart.setEnabled(true));
+    QVERIFY(autostart.enabled());
+    QVERIFY(QFile::exists(appData + QStringLiteral("/Microsoft/Windows/Start Menu/Programs/Startup/Harbor.lnk")));
+
+    QVERIFY(autostart.setEnabled(false));
+    QVERIFY(!autostart.enabled());
+
+    QDir(appData).removeRecursively();
 #endif
 }
 
