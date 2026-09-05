@@ -286,9 +286,11 @@ QJsonObject HarborPresenceSource::pollWindows()
                     info.SessionId, WTSSessionInfoEx,
                     reinterpret_cast<LPWSTR *>(&details), &bytes)
                 && details != nullptr) {
-                snapshot.insert(QStringLiteral("screenLocked"),
-                    details->Data.WTSSessionInfo.SessionFlags
-                        == WTS_SESSIONSTATE_LOCK);
+                if (details->Level == 1) {
+                    snapshot.insert(QStringLiteral("screenLocked"),
+                        details->Data.WTSInfoExLevel1.SessionFlags
+                            == WTS_SESSIONSTATE_LOCK);
+                }
                 WTSFreeMemory(details);
             }
         }
