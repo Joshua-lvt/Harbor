@@ -283,6 +283,15 @@ QString HarborAppIconProvider::iconUrl(const QString &appId,
 
 QString HarborAppIconProvider::resolveLinux(const QString &appId,
                                             const QString &iconKey) const
+#ifdef Q_OS_WIN
+{
+    // Never called on Windows (iconUrl dispatches to resolveWindows); kept
+    // out so the Linux-only .desktop fallback below never compiles here.
+    Q_UNUSED(appId);
+    Q_UNUSED(iconKey);
+    return {};
+}
+#else
 {
     // 1–2. Theme lookup: explicit icon key first, then the app id itself
     // (`firefox` resolves without any .desktop parse on most systems).
@@ -312,6 +321,7 @@ QString HarborAppIconProvider::resolveLinux(const QString &appId,
     }
     return {};
 }
+#endif
 
 QString HarborAppIconProvider::resolveWindows(const QString &appId) const
 {
