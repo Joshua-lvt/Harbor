@@ -21,10 +21,11 @@ on:
   pull_request:
 
 env:
-  # Desktop kits ride the last fully-mirrored Qt (aqtinstall cannot parse
-  # the newer nested repo layout yet); Android stays on the local kit.
-  QT_VERSION_DESKTOP: "6.9.3"
-  QT_VERSION_ANDROID: "6.11.2"
+  # Last Qt with flat aqtinstall metadata on every target (6.9+ moved to a
+  # nested repo layout aqt 3.3.0 cannot parse). This also pins CI to the LTS
+  # near our 6.5 floor while development rides newer local kits.
+  QT_VERSION_DESKTOP: "6.8.3"
+  QT_VERSION_ANDROID: "6.8.3"
 
 jobs:
   version-check:
