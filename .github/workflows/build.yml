@@ -204,7 +204,7 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
           mkdir -p ~/Android && ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
           "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
-      - name: Qt desktop host tools first (matches the green linux job)
+      - name: Fetch the desktop host kit built by qt-desktop-kit
         uses: actions/download-artifact@v4
         with:
           name: qt-desktop-kit
@@ -222,15 +222,23 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: true
-      - name: Link Qt kit into the $HOME/Qt layout
+      - name: Link Qt kits into the $HOME/Qt layout
+        env:
+          HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
         run: |
           test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
             || { echo "missing android kit"; exit 1; }
           mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
           ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
             "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          # The desktop kit installed above lands beside it; build-android.sh
-          # picks it up as QT_HOST automatically when the versions line up.
+          # The desktop kit from the artifact lands beside it; the build
+          # script picks it up as QT_HOST automatically (same version).
+          mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64" \
+            "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
+          test -x "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64/bin/moc" \
+            || { echo "missing host kit link"; exit 1; }
+          echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:
