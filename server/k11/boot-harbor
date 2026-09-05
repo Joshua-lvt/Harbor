@@ -1,0 +1,6 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux:Boot entry: relaunch Harbor supervision at device start.
+# Install path on the K11+: ~/.termux/boot/harbor (chmod +x), needs the
+# Termux:Boot app. Boot scripts run sequentially, so this only spawns the
+# supervisor and returns immediately.
+nohup sh "$HOME/harbor/supervise.sh" >> "$HOME/harbor/supervisor.log" 2>&1 &

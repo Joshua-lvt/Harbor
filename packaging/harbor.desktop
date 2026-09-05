@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Harbor
+GenericName=Peer-to-peer companion
+Comment=A calm, direct link between two people
+Exec=harbor
+Icon=harbor
+Terminal=false
+Categories=Network;InstantMessaging;

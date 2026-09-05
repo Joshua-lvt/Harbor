@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor Mobile: same identity, same partner, same conversation. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="20100"
+    android:versionName="2.1.0"
+    android:installLocation="auto">
+
+    <!-- Network state + internet: control plane, signaling relay, link dial. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Foreground services, typed per use (API 29+/34 enforcement). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Location: foreground first; background only via the settings-page
+         grant on API 30+, with rationale, or tracking stays foreground. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Microphone: requested only for calls; the mic joins muted always. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Notifications: Harbor's own alerts + the persistent presence bar. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Usage Stats is a special Settings grant, not a runtime dialog. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <!-- Battery optimization exemption is ask-only with rationale. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Mandatory updates: fetch over HTTPS, verify SHA-256, then hand the
+         package to the platform installer (system UI, not silent). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Usage access and notification-listener access are special grants
+         requested from their own settings pages, never at startup. -->
+    <!-- SDK versions ride the gradle properties (AGP 9 forbids uses-sdk). -->
+
+    <application
+        android:name="org.qtproject.qt.android.bindings.QtApplication"
+        android:label="Harbor"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+
+        <activity
+            android:name="org.harbor.mobile.HarborMobileActivity"
+            android:label="Harbor"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+            android:launchMode="singleTop"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The Qt loader resolves libharbor-mobile_<abi>.so from this. -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="harbor-mobile" />
+        </activity>
+
+        <!-- Persistent partner presence bar (ongoing, low importance). -->
+        <service
+            android:name="org.harbor.mobile.HarborPresenceBar"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Partner presence bar while Harbor is paired" />
+        </service>
+
+        <!-- Location sharing, only while the toggle is ON with a grant. -->
+        <service
+            android:name="org.harbor.mobile.HarborLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <!-- Call audio: the Go worker owns the Android miniaudio/OpenSL ES
+             devices while this service owns the visible background lifetime. -->
+        <service
+            android:name="org.harbor.mobile.HarborCallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
+
+        <!-- Phone-notification mirroring, only while its toggle is ON. -->
+        <service
+            android:name="org.harbor.mobile.HarborPhoneNotifications"
+            android:label="Harbor notification mirroring"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Update packages staged in the app cache for the installer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="org.harbor.mobile.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
+    </application>
+</manifest>

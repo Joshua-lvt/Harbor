@@ -1,0 +1,232 @@
+# Harbor CI: one product version (VERSION file) across desktop Linux,
+# desktop Windows and Android. Tags look like v2.1.0 and must match VERSION.
+#
+# Release assets (names are a contract: the in-app updaters pick them):
+#   harbor-linux-x86_64.tar.gz   (+ .sha256)   harbor, harbor-core, harbor-media
+#   harbor-windows-x86_64.zip    (+ .sha256)   harbor.exe, harbor-core.exe, harbor-media.exe
+#   harbor-android-arm64-debug.apk (+ .sha256)  testing channel, see below
+#
+# The Android build is still lapidary work: it compiles, installs and runs,
+# but rides the debug key and the Tailnet-only path, so releases label it
+# as testing and CI keeps it as a regular (watched, non-gating for desktop
+# releases) job.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  tags:
+    - "v*"
+
+env:
+  QT_VERSION: "6.11.2"
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Single product version everywhere
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          test -n "$VERSION"
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"' CMakeLists.txt
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION"' Harbor-Mobile/CMakeLists.txt
+          MAJOR="${VERSION%%.*}"; REST="${VERSION#*.}"; MINOR="${REST%%.*}"; PATCH="${REST##*.}"
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          grep -q "android:versionCode=\"$CODE\"" Harbor-Mobile/android/AndroidManifest.xml
+          grep -q "android:versionName=\"$VERSION\"" Harbor-Mobile/android/AndroidManifest.xml
+          echo "version $VERSION (code $CODE) is consistent"
+
+  linux:
+    needs: version-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libopus-dev libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3 \
+            libgl1 libegl1
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+      - name: Configure, build, test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+          cmake --build build --parallel
+          cmake --build build --target all_qmllint
+          ctest --test-dir build --output-on-failure
+      - name: Package release tarball
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          STAGE="dist/harbor-linux-x86_64"
+          mkdir -p "$STAGE"
+          cp build/harbor build/cargo-target/release/harbor-core "$STAGE/" 2>/dev/null \
+            || cp build/harbor build/cargo-target/debug/harbor-core "$STAGE/"
+          cp build/media/harbor-media "$STAGE/"
+          echo "$VERSION" > "$STAGE/version.txt"
+          tar -czf "harbor-linux-x86_64.tar.gz" -C dist harbor-linux-x86_64
+          sha256sum harbor-linux-x86_64.tar.gz | awk '{print $1}' > harbor-linux-x86_64.tar.gz.sha256
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: |
+            harbor-linux-x86_64.tar.gz
+            harbor-linux-x86_64.tar.gz.sha256
+
+  windows:
+    needs: version-check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Qt (MSVC 2022 64-bit)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+      - name: MinGW + Opus for the media worker CGO build
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config mingw-w64-x86_64-opus
+      - name: Configure, build, test
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+          $env:CC = "C:\msys64\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
+          $env:PKG_CONFIG_PATH = "C:\msys64\mingw64\lib\pkgconfig"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
+          cmake --build build --parallel --config Release
+          ctest --test-dir build --output-on-failure -C Release
+      - name: Package release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          mkdir -p dist/harbor-windows-x86_64
+          cp build/Release/harbor.exe build/Release/harbor-core.exe build/Release/harbor-media.exe dist/harbor-windows-x86_64/
+          echo "$VERSION" > dist/harbor-windows-x86_64/version.txt
+          (cd dist && 7z a ../harbor-windows-x86_64.zip harbor-windows-x86_64)
+          sha256sum harbor-windows-x86_64.zip | awk '{print $1}' > harbor-windows-x86_64.zip.sha256
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: |
+            harbor-windows-x86_64.zip
+            harbor-windows-x86_64.zip.sha256
+
+  android:
+    # Testing channel: debug key, Tailnet path, emulator-proven only.
+    needs: version-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Android SDK + NDK
+        uses: android-actions/setup-android@v3
+      - name: Install platform, build-tools, NDK
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          mkdir -p ~/Android && ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
+          "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+      - name: Qt for Android (arm64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: android_arm64_v8a
+          cache: true
+      - name: Link Qt into the $HOME/Qt layout build-android.sh expects
+        run: |
+          qtdir="$(dirname "$(dirname "$Qt6_DIR")")"
+          arch="$(basename "$qtdir")"
+          ver="$(basename "$(dirname "$qtdir")")"
+          mkdir -p "$HOME/Qt/$ver"
+          ln -sfn "$qtdir" "$HOME/Qt/$ver/$arch"
+          test -x "$HOME/Qt/$ver/$arch/bin/qt-cmake"
+      - name: Rust with Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+      - name: Build debug APK
+        run: ./Harbor-Mobile/build-android.sh arm64
+      - name: Rename + checksum
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          APK="$(find Harbor-Mobile/build-arm64 -path '*outputs/apk/debug/*.apk' | head -1)"
+          cp "$APK" harbor-android-arm64-debug.apk
+          sha256sum harbor-android-arm64-debug.apk | awk '{print $1}' > harbor-android-arm64-debug.apk.sha256
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-package
+          path: |
+            harbor-android-arm64-debug.apk
+            harbor-android-arm64-debug.apk.sha256
+
+  release:
+    needs: [linux, windows, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            harbor-linux-x86_64.tar.gz
+            harbor-linux-x86_64.tar.gz.sha256
+            harbor-windows-x86_64.zip
+            harbor-windows-x86_64.zip.sha256
+            harbor-android-arm64-debug.apk
+            harbor-android-arm64-debug.apk.sha256
+          generate_release_notes: true
+          body: |
+            Harbor ${{ github.ref_name }} — updates install themselves on every version (mandatory once discovered; offline never bricks the app).
+
+            - **PC Linux** (`harbor-linux-x86_64.tar.gz`): ready for daily use.
+            - **PC Windows** (`harbor-windows-x86_64.zip`): ready for daily use.
+            - **Android** (`harbor-android-arm64-debug.apk`): 🚧 still testing — debug-signed, Tailnet path, emulator-proven.

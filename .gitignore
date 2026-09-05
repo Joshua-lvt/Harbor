@@ -1,0 +1,56 @@
+# Build trees (CMake, Cargo, Go, Gradle) — never committed.
+build/
+target/
+cargo-target/
+Harbor-Mobile/build-*/
+Harbor-Mobile/target/
+Harbor-Mobile/.gradle/
+Testing/
+*.o
+*.a
+*.so
+*.exe
+
+# Built product binaries (rebuilt by CMake/CI, not sources).
+media/harbor-media
+harbor-media.exe
+*.apk
+*.aab
+*.zip
+*.tar.gz
+!media/win-deps/src/*.tar.gz
+
+# Android local SDK wiring.
+local.properties
+*.jks
+*.keystore
+
+# AI session notes and prompt scratchpads live outside the repo history.
+valiant-napping-moon.md
+*prompt*.md
+PROMPT*.md
+.opencode/
+.claude/
+
+# IDE and editor state.
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS droppings.
+.DS_Store
+Thumbs.db
+
+# Vendored third-party *build trees* stay out; their source tarballs are
+# committed and extracted on demand (see build-android.sh and CI).
+media/win-deps/src/opus-1.5.2/
+media/win-deps/src/libvpx-1.16.0/
+media/win-deps/prefix/
+media/win-deps/nasm-root/
+media/win-deps/nasm.pkg.tar.zst
+media/win-deps/nasm.tgz
+
+# Logs and local diagnostics.
+*.log
+/tmp/
