@@ -45,6 +45,30 @@ jobs:
           grep -q "android:versionName=\"$VERSION\"" Harbor-Mobile/android/AndroidManifest.xml
           echo "version $VERSION (code $CODE) is consistent"
 
+  # The Android job cannot fetch this kit itself (its second aqt run in
+  # one job deterministically misparses the repo metadata), so a tiny
+  # producer job installs it exactly like the green Linux job does and
+  # hands the working tree over as an artifact.
+  qt-desktop-kit:
+    needs: version-check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_DESKTOP }}
+          cache: true
+      - name: Pack the kit
+        run: |
+          tar -cf "$RUNNER_TEMP/qt-desktop-kit.tar" -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}" gcc_64
+          ls -la "$RUNNER_TEMP/qt-desktop-kit.tar"
+      - name: Upload desktop Qt kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-desktop-kit
+          path: ${{ runner.temp }}/qt-desktop-kit.tar
+          retention-days: 2
+
   linux:
     needs: version-check
     runs-on: ubuntu-24.04
@@ -164,7 +188,7 @@ jobs:
 
   android:
     # Testing channel: debug key, Tailnet path, emulator-proven only.
-    needs: version-check
+    needs: [version-check, qt-desktop-kit]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -181,12 +205,16 @@ jobs:
           mkdir -p ~/Android && ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
           "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
       - name: Qt desktop host tools first (matches the green linux job)
-        uses: jurplel/install-qt-action@v4
+        uses: actions/download-artifact@v4
         with:
-          version: ${{ env.QT_VERSION_DESKTOP }}
-          target: desktop
-          arch: gcc_64
-          cache: true
+          name: qt-desktop-kit
+          path: ${{ runner.temp }}/qtdesktop
+      - name: Unpack desktop kit into the shared layout
+        run: |
+          mkdir -p "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
+          tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
+            -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
+          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/moc"
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
