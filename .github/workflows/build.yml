@@ -126,15 +126,17 @@ jobs:
         shell: pwsh
         run: |
           # Ninja: MSBuild cannot create the Qt resource paths with "..".
-          # CC points Go/CGO at MinGW while Rust's cc crate keeps MSVC cl;
-          # pkg-config rides an appended (never shadowing) PATH entry.
-          $env:PATH = $env:PATH + ';${{ steps.msys2.outputs.msys2-location }}/mingw64/bin'
-          $env:CC = '${{ steps.msys2.outputs.msys2-location }}/mingw64/bin/x86_64-w64-mingw32-gcc.exe'
+          # CC points Go/CGO at MinGW while Rust's cc crate keeps MSVC cl.
+          # Slashes are normalized: msys2-location arrives with backslashes,
+          # which MinGW gcc misreads inside -I/-L flags.
+          $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
+          $env:PATH = $env:PATH + ";$msys/mingw64/bin"
+          $env:CC = "$msys/mingw64/bin/x86_64-w64-mingw32-gcc.exe"
           $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
           # Bypass pkg-config: point cgo straight at the msys2 opus headers
           # and import library instead of depending on .pc resolution.
-          $env:CGO_CFLAGS = '-I${{ steps.msys2.outputs.msys2-location }}/mingw64/include'
-          $env:CGO_LDFLAGS = '-L${{ steps.msys2.outputs.msys2-location }}/mingw64/lib -lopus'
+          $env:CGO_CFLAGS = "-I$msys/mingw64/include"
+          $env:CGO_LDFLAGS = "-L$msys/mingw64/lib -lopus"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
@@ -182,6 +184,7 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: true
+          cache-key-prefix: install-qt-android-v2
       - name: Link Qt kit into the $HOME/Qt layout
         run: |
           test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
