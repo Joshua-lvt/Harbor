@@ -177,6 +177,13 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
           mkdir -p ~/Android && ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
           "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+      - name: Qt desktop host tools first (matches the green linux job)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_DESKTOP }}
+          target: desktop
+          arch: gcc_64
+          cache: true
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
@@ -184,7 +191,6 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: true
-          cache-key-prefix: install-qt-android-v2
       - name: Link Qt kit into the $HOME/Qt layout
         run: |
           test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
@@ -194,28 +200,17 @@ jobs:
             "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
           # No separate desktop kit: build-android.sh falls back to the
           # target kit's own host-built tools (moc/rcc/uic + QML drivers).
-      - name: Python for the Qt installer
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Qt desktop host tools with retries
+      - name: Link Qt kit into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
         run: |
-          python -m pip install -q "aqtinstall==3.3.*"
-          # The Qt metadata mirrors flap ("qt_base not found" on a fine
-          # repo), so a single shot would red the job on mirror luck.
-          for i in 1 2 3 4 5; do
-            if python -m aqt install-qt linux desktop "$HARBOR_QT_HOST_VERSION" gcc_64 \
-                --autodesktop --outputdir "$RUNNER_WORKSPACE/Qt"; then
-              break
-            fi
-            echo "Qt host install attempt $i failed; scrubbing and retrying in 60s"
-            rm -rf "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
-            sleep 60
-            if [ "$i" = 5 ]; then exit 1; fi
-          done
-          test -x "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64/bin/moc"
+          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
+            || { echo "missing android kit"; exit 1; }
+          test -x "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64/bin/qt-cmake" \
+            || { echo "missing host kit"; exit 1; }
+          mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
+            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
           mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
           ln -sfn "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64" \
             "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
