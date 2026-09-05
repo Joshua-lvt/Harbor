@@ -1,58 +1,8 @@
-qt_add_executable(harbor_qmltests quicktest_main.cpp)
-
-set(HARBOR_TEST_QML_FILES)
-foreach(qml_file IN LISTS HARBOR_QML_FILES)
-    set(absolute_qml_file "${CMAKE_SOURCE_DIR}/${qml_file}")
-    get_filename_component(qml_name "${qml_file}" NAME)
-    set_source_files_properties("${absolute_qml_file}" PROPERTIES QT_RESOURCE_ALIAS "${qml_name}")
-    list(APPEND HARBOR_TEST_QML_FILES "${absolute_qml_file}")
-endforeach()
-
-set_source_files_properties(
-    "${CMAKE_SOURCE_DIR}/qml/Theme.qml"
-    "${CMAKE_SOURCE_DIR}/qml/AppState.qml"
-    "${CMAKE_SOURCE_DIR}/qml/I18n.qml"
-    "${CMAKE_SOURCE_DIR}/qml/MockController.qml"
-    PROPERTIES QT_QML_SINGLETON_TYPE TRUE
-)
-set_source_files_properties("${CMAKE_SOURCE_DIR}/qml/i18n/en.js"
-    PROPERTIES QT_RESOURCE_ALIAS "i18n/en.js")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/qml/i18n/pt_BR.js"
-    PROPERTIES QT_RESOURCE_ALIAS "i18n/pt_BR.js")
-
-set(HARBOR_TEST_RESOURCE_FILES)
-foreach(resource_file IN LISTS HARBOR_RESOURCE_FILES)
-    set(absolute_resource_file "${CMAKE_SOURCE_DIR}/${resource_file}")
-    get_filename_component(resource_name "${resource_file}" NAME)
-    if(resource_file MATCHES "\\.png$")
-        set_source_files_properties("${absolute_resource_file}" PROPERTIES
-            QT_RESOURCE_ALIAS "images/${resource_name}"
-        )
-    else()
-        set_source_files_properties("${absolute_resource_file}" PROPERTIES
-            QT_RESOURCE_ALIAS "fonts/${resource_name}"
-        )
-    endif()
-    list(APPEND HARBOR_TEST_RESOURCE_FILES "${absolute_resource_file}")
-endforeach()
-
-qt_add_qml_module(harbor_qmltests
-    URI Harbor
-    VERSION 2.0
-    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Harbor"
-    QML_FILES ${HARBOR_TEST_QML_FILES}
-    RESOURCES ${HARBOR_TEST_RESOURCE_FILES}
-)
-
-target_link_libraries(harbor_qmltests PRIVATE Qt6::Quick Qt6::QuickTest)
-target_compile_definitions(harbor_qmltests PRIVATE
-    QUICK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml"
-)
-
-add_test(NAME harbor_qmltests COMMAND harbor_qmltests)
-set_tests_properties(harbor_qmltests PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QML_DISABLE_DISK_CACHE=1"
-)
+# NOTE: harbor_qmltests lives in the root CMakeLists on purpose. Its QML
+# module reuses HARBOR_QML_FILES with tree-relative paths, so the qmlcache
+# output names never escape into ".." segments — Windows path handling
+# mangles trailing-dot segments and neither MSBuild nor Ninja can create
+# those directories there.
 
 qt_add_executable(harbor_core_supervisor_tests
     HarborCoreSupervisorTest.cpp
@@ -79,7 +29,7 @@ add_test(NAME harbor_core_supervisor_tests COMMAND harbor_core_supervisor_tests)
 # and settings writes into the developer's real state directory.
 set_tests_properties(harbor_core_supervisor_tests PROPERTIES
     ENVIRONMENT
-    "HOME=${CMAKE_CURRENT_BINARY_DIR}/test-home;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-home/state"
+    "HOME=${CMAKE_CURRENT_BINARY_DIR}/test-home;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-home/state;QT_QPA_PLATFORM=offscreen"
 )
 
 # The avatar importer only needs the facade object, never a running core,

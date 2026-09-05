@@ -239,6 +239,25 @@ endif()
 
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS QuickTest Test)
+    # The QML test runner lives here (not in tests/) so the module's qmlcache
+    # output paths never escape the source tree with ".." segments, which
+    # Windows path handling mangles into uncreatable directories.
+    qt_add_executable(harbor_qmltests tests/quicktest_main.cpp)
+    qt_add_qml_module(harbor_qmltests
+        URI Harbor
+        VERSION 2.0
+        OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/HarborTest"
+        QML_FILES ${HARBOR_QML_FILES}
+        RESOURCES ${HARBOR_RESOURCE_FILES}
+    )
+    target_link_libraries(harbor_qmltests PRIVATE Qt6::Quick Qt6::QuickTest)
+    target_compile_definitions(harbor_qmltests PRIVATE
+        QUICK_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}/tests/qml"
+    )
+    add_test(NAME harbor_qmltests COMMAND harbor_qmltests)
+    set_tests_properties(harbor_qmltests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QML_DISABLE_DISK_CACHE=1"
+    )
     add_subdirectory(tests)
 endif()
 
