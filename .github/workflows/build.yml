@@ -179,36 +179,15 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: true
-      # Second Qt install in one job: the Qt metadata mirrors flap
-      # ("qt_base not found" on an otherwise fine repo), so this step
-      # retries where a single shot would red the whole job.
-      - name: Qt desktop host tools (QT_HOST_PATH)
-        uses: Wandalen/wretry.action@v2
-        with:
-          action: jurplel/install-qt-action@v4
-          with: |
-            version: ${{ env.QT_VERSION_DESKTOP }}
-            target: desktop
-            arch: gcc_64
-            cache: true
-            cache-key-prefix: install-qt-host
-          attempt_limit: 3
-          attempt_delay: 60000
-      - name: Link Qt kits into the $HOME/Qt layout
-        env:
-          HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
+      - name: Link Qt kit into the $HOME/Qt layout
         run: |
           test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
             || { echo "missing android kit"; exit 1; }
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/qt-cmake" \
-            || { echo "missing host kit"; exit 1; }
           mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
           ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
             "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64" \
-            "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
-          echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
+          # No separate desktop kit: build-android.sh falls back to the
+          # target kit's own host-built tools (moc/rcc/uic + QML drivers).
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -81,10 +81,10 @@ impl ProcessMonitor for WindowsProcessMonitor {
         let output = std::process::Command::new("tasklist")
             .args(["/FO", "CSV", "/NH"])
             .output()
-            .map_err(|e| io::Error::new(io::ErrorKind::Uncategorized, e))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         if !output.status.success() {
             return Err(io::Error::new(
-                io::ErrorKind::Uncategorized,
+                io::ErrorKind::Other,
                 "tasklist exited non-zero",
             ));
         }
