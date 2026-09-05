@@ -128,10 +128,10 @@ jobs:
           # Ninja: MSBuild cannot create the Qt resource paths with "..".
           # CC points Go/CGO at MinGW while Rust's cc crate keeps MSVC cl;
           # pkg-config rides an appended (never shadowing) PATH entry.
-          $env:PATH = $env:PATH + ";${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
-          $env:CC = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
-          $env:CC_x86_64_pc_windows_msvc = "cl.exe"
-          $env:PKG_CONFIG_PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\lib\pkgconfig"
+          $env:PATH = $env:PATH + ';${{ steps.msys2.outputs.msys2-location }}/mingw64/bin'
+          $env:CC = '${{ steps.msys2.outputs.msys2-location }}/mingw64/bin/x86_64-w64-mingw32-gcc.exe'
+          $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
+          $env:PKG_CONFIG_PATH = '${{ steps.msys2.outputs.msys2-location }}/mingw64/lib/pkgconfig'
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
@@ -198,6 +198,8 @@ jobs:
           go-version: "1.27"
           cache-dependency-path: media/go.sum
       - name: Build debug APK
+        env:
+          HARBOR_QT_VERSION: ${{ env.QT_VERSION_ANDROID }}
         run: ./Harbor-Mobile/build-android.sh arm64
       - name: Rename + checksum
         if: startsWith(github.ref, 'refs/tags/v')
