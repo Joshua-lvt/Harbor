@@ -4,7 +4,8 @@
 #   ./build-android.sh arm64   # device (arm64-v8a)
 #   ./build-android.sh x64     # emulator (x86_64)
 #
-# Prerequisites: Qt 6.11.2 for Android, NDK 28, SDK 35, JDK 17, Rust with
+# Prerequisites: Qt for Android (6.11.2 locally; HARBOR_QT_VERSION overrides),
+# NDK 28, SDK 35, JDK 17, Rust with
 # the aarch64/x86_64-linux-android targets. Everything is validated up
 # front with honest errors; nothing proceeds on a broken toolchain.
 set -euo pipefail
@@ -42,7 +43,8 @@ if [ ! -f "$ROOT/media/win-deps/src/opus-1.5.2/CMakeLists.txt" ]; then
     mkdir -p "$ROOT/media/win-deps/src/opus-1.5.2"
     tar -xzf "$ROOT/media/win-deps/src/opus-1.5.2.tar.gz" -C "$ROOT/media/win-deps/src/opus-1.5.2" --strip-components=1
 fi
-QT="$HOME/Qt/6.11.2/$QT_ABI"
+QT_VERSION="${HARBOR_QT_VERSION:-6.11.2}"
+QT="$HOME/Qt/$QT_VERSION/$QT_ABI"
 NDK="$HOME/Android/Sdk/ndk/28.2.13676358"
 SDK="$HOME/Android/Sdk"
 TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
@@ -118,7 +120,7 @@ echo "==> cmake: $BUILD"
 "$QT/bin/qt-cmake" -S "$MOBILE" -B "$BUILD" \
     -DANDROID_ABI="$GRADLE_ABI" \
     -DANDROID_PLATFORM=android-35 \
-    -DQT_HOST_PATH="$HOME/Qt/6.11.2/gcc_64" \
+    -DQT_HOST_PATH="$HOME/Qt/$QT_VERSION/gcc_64" \
     -DQt6_DIR="$QT/lib/cmake/Qt6" \
     -DCMAKE_PREFIX_PATH="$QT" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
@@ -140,7 +142,7 @@ if [ "$BUILD_TYPE" = Release ]; then
     # exported values when they create the APK/AAB package targets.
     "$QT/bin/qt-cmake" -S "$MOBILE" -B "$BUILD" \
         -DANDROID_ABI="$GRADLE_ABI" -DANDROID_PLATFORM=android-35 \
-        -DQT_HOST_PATH="$HOME/Qt/6.11.2/gcc_64" -DQt6_DIR="$QT/lib/cmake/Qt6" \
+        -DQT_HOST_PATH="$HOME/Qt/$QT_VERSION/gcc_64" -DQt6_DIR="$QT/lib/cmake/Qt6" \
         -DCMAKE_PREFIX_PATH="$QT" -DCMAKE_BUILD_TYPE=Release \
         -DHARBOR_CORE_LIB="$CORE_LIB" -DHARBOR_MEDIA_ANDROID_BINARY="$MEDIA_BINARY" \
         -DHARBOR_SIGN_APK=ON

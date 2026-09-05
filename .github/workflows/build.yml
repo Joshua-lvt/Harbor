@@ -21,7 +21,10 @@ on:
   pull_request:
 
 env:
-  QT_VERSION: "6.11.2"
+  # Desktop kits ride the last fully-mirrored Qt (aqtinstall cannot parse
+  # the newer nested repo layout yet); Android stays on the local kit.
+  QT_VERSION_DESKTOP: "6.9.3"
+  QT_VERSION_ANDROID: "6.11.2"
 
 jobs:
   version-check:
@@ -56,7 +59,7 @@ jobs:
       - name: Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_VERSION_DESKTOP }}
           cache: true
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
@@ -100,7 +103,7 @@ jobs:
       - name: Qt (MSVC 2022 64-bit)
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_VERSION_DESKTOP }}
           arch: win64_msvc2022_64
           cache: true
       - name: MSVC environment
@@ -166,14 +169,14 @@ jobs:
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_VERSION_ANDROID }}
           target: android
           arch: android_arm64_v8a
           cache: true
       - name: Qt desktop host tools (QT_HOST_PATH)
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_VERSION_ANDROID }}
           target: desktop
           arch: gcc_64
           cache: true
@@ -181,14 +184,14 @@ jobs:
       - name: Link Qt into the $HOME/Qt layout build-android.sh expects
         run: |
           for kit in android_arm64_v8a gcc_64; do
-            src="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/$kit"
+            src="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/$kit"
             test -x "$src/bin/qt-cmake" || { echo "missing kit: $src"; exit 1; }
           done
-          mkdir -p "$HOME/Qt/${{ env.QT_VERSION }}"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/android_arm64_v8a" \
-            "$HOME/Qt/${{ env.QT_VERSION }}/android_arm64_v8a"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/gcc_64" \
-            "$HOME/Qt/${{ env.QT_VERSION }}/gcc_64"
+          mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
+            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/gcc_64" \
+            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/gcc_64"
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:
