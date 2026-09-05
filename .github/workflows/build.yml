@@ -133,8 +133,11 @@ jobs:
           $env:PATH = $env:PATH + ";$msys/mingw64/bin"
           $env:CC = "$msys/mingw64/bin/x86_64-w64-mingw32-gcc.exe"
           $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
-          # Bypass pkg-config: point cgo straight at the msys2 opus headers
-          # and import library instead of depending on .pc resolution.
+          # Pin pkg-config to msys2's own (other PATH entries ship
+          # lookalikes that never see the mingw64 .pc files) and point cgo
+          # straight at the opus headers/import library as well.
+          $env:PKG_CONFIG = "$msys/mingw64/bin/pkg-config.exe"
+          $env:PKG_CONFIG_PATH = "$msys/mingw64/lib/pkgconfig"
           $env:CGO_CFLAGS = "-I$msys/mingw64/include"
           $env:CGO_LDFLAGS = "-L$msys/mingw64/lib -lopus"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
