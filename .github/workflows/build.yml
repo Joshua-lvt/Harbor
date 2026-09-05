@@ -54,7 +54,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config \
-            libopus-dev libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3 \
+            libopus-dev libvpx-dev libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3 \
             libgl1 libegl1
       - name: Qt
         uses: jurplel/install-qt-action@v4
@@ -116,6 +116,7 @@ jobs:
           go-version: "1.27"
           cache-dependency-path: media/go.sum
       - name: MinGW + Opus for the media worker CGO build
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -123,12 +124,16 @@ jobs:
       - name: Configure, build, test
         shell: pwsh
         run: |
-          $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
-          $env:CC = "C:\msys64\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
-          $env:PKG_CONFIG_PATH = "C:\msys64\mingw64\lib\pkgconfig"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
-          cmake --build build --parallel --config Release
-          ctest --test-dir build --output-on-failure -C Release
+          # Ninja: MSBuild cannot create the Qt resource paths with "..".
+          # CC points Go/CGO at MinGW while Rust's cc crate keeps MSVC cl;
+          # pkg-config rides an appended (never shadowing) PATH entry.
+          $env:PATH = $env:PATH + ";${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          $env:CC = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
+          $env:CC_x86_64_pc_windows_msvc = "cl.exe"
+          $env:PKG_CONFIG_PATH = "${{ steps.msys2.outputs.msys2-location }}\mingw64\lib\pkgconfig"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
       - name: Package release zip
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -181,17 +186,21 @@ jobs:
           arch: gcc_64
           cache: true
           cache-key-prefix: install-qt-host
-      - name: Link Qt into the $HOME/Qt layout build-android.sh expects
+      - name: Link Qt kits into the $HOME/Qt layout
+        env:
+          HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
         run: |
-          for kit in android_arm64_v8a gcc_64; do
-            src="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/$kit"
-            test -x "$src/bin/qt-cmake" || { echo "missing kit: $src"; exit 1; }
-          done
+          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
+            || { echo "missing android kit"; exit 1; }
+          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/qt-cmake" \
+            || { echo "missing host kit"; exit 1; }
           mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
           ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
             "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/gcc_64" \
-            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/gcc_64"
+          mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64" \
+            "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
+          echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:

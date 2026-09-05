@@ -45,6 +45,9 @@ if [ ! -f "$ROOT/media/win-deps/src/opus-1.5.2/CMakeLists.txt" ]; then
 fi
 QT_VERSION="${HARBOR_QT_VERSION:-6.11.2}"
 QT="$HOME/Qt/$QT_VERSION/$QT_ABI"
+# Host tools may come from a different (older, fully mirrored) kit than the
+# target; moc/rcc output stays compatible for this codebase.
+QT_HOST_VERSION="${HARBOR_QT_HOST_VERSION:-$QT_VERSION}"
 NDK="$HOME/Android/Sdk/ndk/28.2.13676358"
 SDK="$HOME/Android/Sdk"
 TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
@@ -120,7 +123,7 @@ echo "==> cmake: $BUILD"
 "$QT/bin/qt-cmake" -S "$MOBILE" -B "$BUILD" \
     -DANDROID_ABI="$GRADLE_ABI" \
     -DANDROID_PLATFORM=android-35 \
-    -DQT_HOST_PATH="$HOME/Qt/$QT_VERSION/gcc_64" \
+    -DQT_HOST_PATH="$HOME/Qt/$QT_HOST_VERSION/gcc_64" \
     -DQt6_DIR="$QT/lib/cmake/Qt6" \
     -DCMAKE_PREFIX_PATH="$QT" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
@@ -142,7 +145,7 @@ if [ "$BUILD_TYPE" = Release ]; then
     # exported values when they create the APK/AAB package targets.
     "$QT/bin/qt-cmake" -S "$MOBILE" -B "$BUILD" \
         -DANDROID_ABI="$GRADLE_ABI" -DANDROID_PLATFORM=android-35 \
-        -DQT_HOST_PATH="$HOME/Qt/$QT_VERSION/gcc_64" -DQt6_DIR="$QT/lib/cmake/Qt6" \
+        -DQT_HOST_PATH="$HOME/Qt/$QT_HOST_VERSION/gcc_64" -DQt6_DIR="$QT/lib/cmake/Qt6" \
         -DCMAKE_PREFIX_PATH="$QT" -DCMAKE_BUILD_TYPE=Release \
         -DHARBOR_CORE_LIB="$CORE_LIB" -DHARBOR_MEDIA_ANDROID_BINARY="$MEDIA_BINARY" \
         -DHARBOR_SIGN_APK=ON
