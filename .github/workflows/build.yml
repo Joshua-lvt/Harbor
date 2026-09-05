@@ -131,7 +131,10 @@ jobs:
           $env:PATH = $env:PATH + ';${{ steps.msys2.outputs.msys2-location }}/mingw64/bin'
           $env:CC = '${{ steps.msys2.outputs.msys2-location }}/mingw64/bin/x86_64-w64-mingw32-gcc.exe'
           $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
-          $env:PKG_CONFIG_PATH = '${{ steps.msys2.outputs.msys2-location }}/mingw64/lib/pkgconfig'
+          # Bypass pkg-config: point cgo straight at the msys2 opus headers
+          # and import library instead of depending on .pc resolution.
+          $env:CGO_CFLAGS = '-I${{ steps.msys2.outputs.msys2-location }}/mingw64/include'
+          $env:CGO_LDFLAGS = '-L${{ steps.msys2.outputs.msys2-location }}/mingw64/lib -lopus'
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure

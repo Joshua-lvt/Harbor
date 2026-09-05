@@ -23,6 +23,9 @@ target_compile_definitions(harbor_core_supervisor_tests PRIVATE
     HARBOR_TEST_CORE_EXECUTABLE=\"${HARBOR_CORE_BINARY}\"
 )
 target_link_libraries(harbor_core_supervisor_tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+if(WIN32)
+    target_link_libraries(harbor_core_supervisor_tests PRIVATE wtsapi32)
+endif()
 add_test(NAME harbor_core_supervisor_tests COMMAND harbor_core_supervisor_tests)
 # The core resolves durable state from XDG_STATE_HOME first and HOME only as
 # a fallback, so both must be pinned — pinning HOME alone leaks test identity
@@ -54,6 +57,9 @@ target_compile_definitions(harbor_avatar_import_tests PRIVATE
     HARBOR_TEST_CORE_EXECUTABLE=\"${HARBOR_CORE_BINARY}\"
 )
 target_link_libraries(harbor_avatar_import_tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+if(WIN32)
+    target_link_libraries(harbor_avatar_import_tests PRIVATE wtsapi32)
+endif()
 add_test(NAME harbor_avatar_import_tests COMMAND harbor_avatar_import_tests)
 set_tests_properties(harbor_avatar_import_tests PROPERTIES
     ENVIRONMENT

@@ -228,6 +228,10 @@ qt_add_qml_module(harbor
 
 target_link_libraries(harbor PRIVATE Qt6::Core Qt6::Quick Qt6::Widgets Qt6::Network)
 if(WIN32)
+    # Terminal Services API for session/lock presence.
+    target_link_libraries(harbor PRIVATE wtsapi32)
+endif()
+if(WIN32)
     # GUI subsystem: no console window behind the app. Development output
     # still lands in the debugger / `qDebug` sinks.
     set_target_properties(harbor PROPERTIES WIN32_EXECUTABLE TRUE)
