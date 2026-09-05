@@ -201,23 +201,8 @@ jobs:
           mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
           ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
             "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          # No separate desktop kit: build-android.sh falls back to the
-          # target kit's own host-built tools (moc/rcc/uic + QML drivers).
-      - name: Link Qt kit into the $HOME/Qt layout
-        env:
-          HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
-        run: |
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
-            || { echo "missing android kit"; exit 1; }
-          test -x "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64/bin/qt-cmake" \
-            || { echo "missing host kit"; exit 1; }
-          mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
-            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64" \
-            "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
-          echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
+          # The desktop kit installed above lands beside it; build-android.sh
+          # picks it up as QT_HOST automatically when the versions line up.
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:
