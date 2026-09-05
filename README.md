@@ -53,4 +53,4 @@ de novo sozinho.
 - Protocolo de controle: [`docs/control-protocol-v1.md`](docs/control-protocol-v1.md)
 - Operação do servidor: [`docs/k11-runbook.md`](docs/k11-runbook.md)
 - Arquitetura mobile: [`Harbor-Mobile/docs/architecture.md`](Harbor-Mobile/docs/architecture.md)
-- Versão atual: [`VERSION`](VERSION) (única para PC, mobile e releases)
+- Versão atual: [`VERSION.txt`](VERSION.txt) (única para PC, mobile e releases)

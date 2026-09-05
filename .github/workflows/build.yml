@@ -34,10 +34,10 @@ jobs:
       - name: Single product version everywhere
         run: |
           set -euo pipefail
-          VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
           test -n "$VERSION"
-          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"' CMakeLists.txt
-          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION"' Harbor-Mobile/CMakeLists.txt
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt"' CMakeLists.txt
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.txt"' Harbor-Mobile/CMakeLists.txt
           MAJOR="${VERSION%%.*}"; REST="${VERSION#*.}"; MINOR="${REST%%.*}"; PATCH="${REST##*.}"
           CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
           grep -q "android:versionCode=\"$CODE\"" Harbor-Mobile/android/AndroidManifest.xml
@@ -181,7 +181,7 @@ jobs:
       - name: Qt desktop host tools (QT_HOST_PATH)
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION_ANDROID }}
+          version: ${{ env.QT_VERSION_DESKTOP }}
           target: desktop
           arch: gcc_64
           cache: true

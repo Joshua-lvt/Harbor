@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 # Single product version for every artifact (desktop, mobile, releases).
 # Bump VERSION; CMake, the updater channel, and CI all follow it.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" HARBOR_VERSION_RAW)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" HARBOR_VERSION_RAW)
 string(STRIP "${HARBOR_VERSION_RAW}" HARBOR_VERSION)
 project(Harbor VERSION ${HARBOR_VERSION} LANGUAGES CXX)
 add_compile_definitions(HARBOR_VERSION_STRING="${HARBOR_VERSION}")

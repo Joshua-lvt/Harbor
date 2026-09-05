@@ -31,7 +31,7 @@ MOBILE="$ROOT/Harbor-Mobile"
 # Single product version (VERSION file): release tags, updater channel and
 # the Android manifest follow it. versionCode is MAJOR*10000+MINOR*100+PATCH
 # so every release installs over the previous one.
-APP_VERSION="$(tr -d ' \t\r\n' < "$ROOT/VERSION")"
+APP_VERSION="$(tr -d ' \t\r\n' < "$ROOT/VERSION.txt")"
 APP_CODE="$(echo "$APP_VERSION" | awk -F. '{ print ($1*10000)+($2*100)+$3 }')"
 sed -i -E "s/android:versionCode=\"[0-9]+\"/android:versionCode=\"$APP_CODE\"/" "$MOBILE/android/AndroidManifest.xml"
 sed -i -E "s/android:versionName=\"[^\"]+\"/android:versionName=\"$APP_VERSION\"/" "$MOBILE/android/AndroidManifest.xml"

@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single product version: same file the desktop build, the updater channel
 # and CI releases follow. build-android.sh additionally syncs the Android
 # versionCode/versionName from it (single source of truth).
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" HARBOR_VERSION_RAW)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.txt" HARBOR_VERSION_RAW)
 string(STRIP "${HARBOR_VERSION_RAW}" HARBOR_VERSION)
 project(HarborMobile VERSION ${HARBOR_VERSION} LANGUAGES CXX)
 
