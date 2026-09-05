@@ -179,14 +179,21 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: true
+      # Second Qt install in one job: the Qt metadata mirrors flap
+      # ("qt_base not found" on an otherwise fine repo), so this step
+      # retries where a single shot would red the whole job.
       - name: Qt desktop host tools (QT_HOST_PATH)
-        uses: jurplel/install-qt-action@v4
+        uses: Wandalen/wretry.action@v2
         with:
-          version: ${{ env.QT_VERSION_DESKTOP }}
-          target: desktop
-          arch: gcc_64
-          cache: true
-          cache-key-prefix: install-qt-host
+          action: jurplel/install-qt-action@v4
+          with: |
+            version: ${{ env.QT_VERSION_DESKTOP }}
+            target: desktop
+            arch: gcc_64
+            cache: true
+            cache-key-prefix: install-qt-host
+          attempt_limit: 3
+          attempt_delay: 60000
       - name: Link Qt kits into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
