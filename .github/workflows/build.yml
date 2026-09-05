@@ -67,7 +67,7 @@ jobs:
           cache-dependency-path: media/go.sum
       - name: Configure, build, test
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
           cmake --build build --parallel
           cmake --build build --target all_qmllint
           ctest --test-dir build --output-on-failure
@@ -123,7 +123,7 @@ jobs:
           $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
           $env:CC = "C:\msys64\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
           $env:PKG_CONFIG_PATH = "C:\msys64\mingw64\lib\pkgconfig"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           cmake --build build --parallel --config Release
           ctest --test-dir build --output-on-failure -C Release
       - name: Package release zip
@@ -167,16 +167,28 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          target: android
           arch: android_arm64_v8a
           cache: true
+      - name: Qt desktop host tools (QT_HOST_PATH)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          target: desktop
+          arch: gcc_64
+          cache: true
+          cache-key-prefix: install-qt-host
       - name: Link Qt into the $HOME/Qt layout build-android.sh expects
         run: |
-          qtdir="$(dirname "$(dirname "$Qt6_DIR")")"
-          arch="$(basename "$qtdir")"
-          ver="$(basename "$(dirname "$qtdir")")"
-          mkdir -p "$HOME/Qt/$ver"
-          ln -sfn "$qtdir" "$HOME/Qt/$ver/$arch"
-          test -x "$HOME/Qt/$ver/$arch/bin/qt-cmake"
+          for kit in android_arm64_v8a gcc_64; do
+            src="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/$kit"
+            test -x "$src/bin/qt-cmake" || { echo "missing kit: $src"; exit 1; }
+          done
+          mkdir -p "$HOME/Qt/${{ env.QT_VERSION }}"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/android_arm64_v8a" \
+            "$HOME/Qt/${{ env.QT_VERSION }}/android_arm64_v8a"
+          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/gcc_64" \
+            "$HOME/Qt/${{ env.QT_VERSION }}/gcc_64"
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
         with:
