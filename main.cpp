@@ -4,17 +4,20 @@
 #include "native/HarborTray.h"
 #include "native/HarborNotifications.h"
 #include "native/HarborSounds.h"
-#include "native/HarborUpdater.h"
+#include "native/HarborTailnet.h"
+#include "native/HarborUpdater.h">
 
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
+#include <QIcon>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QThread>
+#include <QTimer>
 
 namespace {
 
@@ -104,6 +107,11 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setApplicationName("Harbor");
     app.setOrganizationName("Harbor");
+    // Window/taskbar icon. The exe file icon itself is embedded via
+    // packaging/harbor.rc on Windows; this covers the taskbar button,
+    // Alt+Tab, and the (custom-drawn) title bar on every platform.
+    // Same bundled PNG the tray adapter falls back to.
+    app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Harbor/images/harbor.png")));
 
     const QStringList args = QCoreApplication::arguments();
     const int applyIndex = args.indexOf(QStringLiteral("--apply-update"));
@@ -112,6 +120,7 @@ int main(int argc, char *argv[])
 
     HarborCoreSupervisor coreSupervisor;
     HarborFacade harborCore(&coreSupervisor);
+    HarborTailnet tailnet;
     HarborTray systemTray;
     HarborAutostart autostart;
     HarborNotifications notifications;
@@ -149,6 +158,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("HarborAutostart", &autostart);
     engine.rootContext()->setContextProperty("HarborNotifications", &notifications);
     engine.rootContext()->setContextProperty("HarborSounds", &sounds);
+    engine.rootContext()->setContextProperty("HarborTailnet", &tailnet);
     engine.rootContext()->setContextProperty("HarborUpdater", &updater);
     QObject::connect(&engine, &QQmlApplicationEngine::warnings,
                      &app, [](const QList<QQmlError> &warnings) {
@@ -162,6 +172,10 @@ int main(int argc, char *argv[])
     }, Qt::QueuedConnection);
     coreSupervisor.start();
     engine.loadFromModule("Harbor", "Main");
+    // Join the Harbor Tailnet after first paint: the first join on a fresh
+    // machine can take seconds, and pairing (the only consumer) happens
+    // strictly after the user interacts.
+    QTimer::singleShot(0, &tailnet, &HarborTailnet::ensureJoined);
 
     return app.exec();
 }

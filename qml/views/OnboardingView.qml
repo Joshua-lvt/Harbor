@@ -26,7 +26,10 @@ HarborOverlayView {
         id: realPairing
 
         // qmllint disable unqualified
-        facade: root.liveCore ? HarborCore : null
+        // Keep the facade attached whenever it exists (not only while the
+        // core is live) so the Harbor-ID copy still reaches the real
+        // clipboard during reconnects. Pairing actions still require `live`.
+        facade: root.hasCore ? HarborCore : null
         // qmllint enable unqualified
     }
 

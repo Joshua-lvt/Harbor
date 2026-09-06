@@ -95,3 +95,17 @@ target_link_libraries(harbor_updater_tests PRIVATE Qt6::Core Qt6::Network Qt6::T
 add_test(NAME harbor_updater_tests COMMAND harbor_updater_tests)
 set_tests_properties(harbor_updater_tests PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Tailnet auto-join adapter: exercised against a stub `tailscale` on PATH,
+# never a real daemon. The test-only key below is syntactically shaped but
+# invalid — production keys arrive exclusively via HARBOR_TAILSCALE_AUTHKEY.
+qt_add_executable(harbor_tailnet_tests HarborTailnetTest.cpp
+    "${CMAKE_SOURCE_DIR}/native/HarborTailnet.cpp"
+    "${CMAKE_SOURCE_DIR}/native/HarborTailnet.h"
+)
+target_include_directories(harbor_tailnet_tests PRIVATE "${CMAKE_SOURCE_DIR}/native")
+target_compile_definitions(harbor_tailnet_tests PRIVATE HARBOR_TAILSCALE_AUTHKEY="tskey-auth-test-only-0000")
+target_link_libraries(harbor_tailnet_tests PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME harbor_tailnet_tests COMMAND harbor_tailnet_tests)
+set_tests_properties(harbor_tailnet_tests PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

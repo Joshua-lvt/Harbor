@@ -264,6 +264,21 @@ TestCase {
         compare(bridge.mockCopyTarget, "pairingCode")
     }
 
+    function test_copyWorksWhileReconnecting() {
+        // Regression: the Harbor-ID copy showed "copied" while the core was
+        // reconnecting but wrote nothing to the clipboard, leaving a stale
+        // six-digit pairing code behind on paste.
+        bridge.facade = stubFacade
+        stubFacade.coreReady = false
+        verify(!bridge.live)
+        stubFacade.calls = []
+        bridge.mockCopy("harbor-d31846b8", "harborId")
+        verify(stubFacade.calls.indexOf("clipboard:harbor-d31846b8") >= 0)
+        verify(bridge.mockCopyFeedbackVisible)
+        compare(bridge.mockCopyTarget, "harborId")
+        stubFacade.coreReady = true
+    }
+
     function test_closePairingResetsAndHides() {
         bridge.facade = stubFacade
         bridge.setPairingMode("qr")

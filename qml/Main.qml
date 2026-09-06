@@ -56,6 +56,18 @@ ApplicationWindow {
     readonly property bool coreUnavailable: hasCoreFacade && !coreReady
         && (HarborCore.coreState === "failed" || HarborCore.coreState === "reconnecting")
     // qmllint enable unqualified
+    // First-run server pin: the facade owns the Harbor-network defaults and
+    // knows whether server.config has been fetched yet; the shell just
+    // nudges it on coreReady and whenever the config lands. One shot per
+    // core session; an existing pin is never overwritten, and the user never
+    // sees addresses or fingerprints.
+    function ensureDefaultServer() {
+        // qmllint disable unqualified
+        if (!hasCoreFacade || !coreReady)
+            return
+        HarborCore.ensureDefaultServer()
+        // qmllint enable unqualified
+    }
     // Real system-tray adapter (absent in QML tests, where the mock provider
     // and this shell's preview flyout remain the deterministic truth).
     // qmllint disable unqualified
@@ -183,9 +195,23 @@ ApplicationWindow {
         target: window
 
         function onCoreReadyChanged() {
+            window.ensureDefaultServer()
             window._runPairingGate()
         }
     }
+
+    // The facade fetches server.config asynchronously after coreReady, so
+    // the first coreReady pass may arrive before the config is known. Retry
+    // the one-shot default pin when the fetch lands.
+    // qmllint disable unqualified
+    Connections {
+        target: typeof HarborCore !== "undefined" ? HarborCore : null
+
+        function onServerChanged() {
+            window.ensureDefaultServer()
+        }
+    }
+    // qmllint enable unqualified
 
     // Close-to-tray keeps the session alive behind a visible affordance:
     // the native tray icon, or the companion widget (whose click reopens

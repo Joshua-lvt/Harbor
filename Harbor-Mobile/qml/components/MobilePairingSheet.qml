@@ -16,11 +16,18 @@ Rectangle {
     property string errorText: ""
     property bool serverConfigured: false
     property bool busy: false
+    // Tailnet gate: Harbor pairs through Tailscale. While false the sheet
+    // offers the store page instead of the pairing flow.
+    property bool tailscaleReady: true
+    // Copy-feedback flash (which code was copied is exactly `code`).
+    property bool copyFlash: false
     // Optional shared theme; without one the sheet keeps its shipped colors.
     property var theme
 
     signal createCode()
     signal submitCode(string code)
+    signal copyCode(string code)
+    signal installTailscale()
     signal acceptRequest()
     signal declineRequest()
     signal cancelFlow()
@@ -78,18 +85,35 @@ Rectangle {
             Layout.fillWidth: true
         }
 
+        Label {
+            text: qsTr("Harbor pairs through Tailscale, which is not installed on this phone.")
+            color: sheet.theme ? sheet.theme.textSecondary : "#9db8c4"
+            visible: !sheet.tailscaleReady
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+
+        MobileButton {
+            theme: sheet.theme
+            text: qsTr("Install Tailscale")
+            visible: !sheet.tailscaleReady
+            Layout.fillWidth: true
+            Layout.preferredHeight: 52
+            onClicked: sheet.installTailscale()
+        }
+
         RowLayout {
             Layout.fillWidth: true
             MobileButton {
                 theme: sheet.theme
                 text: qsTr("Show my code")
-                enabled: sheet.serverConfigured && !sheet.busy
+                enabled: sheet.tailscaleReady && sheet.serverConfigured && !sheet.busy
                 onClicked: { sheet.role = "host"; sheet.createCode() }
             }
             MobileButton {
                 theme: sheet.theme
                 text: qsTr("Enter code")
-                enabled: sheet.serverConfigured && !sheet.busy
+                enabled: sheet.tailscaleReady && sheet.serverConfigured && !sheet.busy
                 onClicked: { sheet.role = "peer"; sheet.resetFlow() }
             }
         }
@@ -102,6 +126,19 @@ Rectangle {
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
+        }
+
+        MobileButton {
+            theme: sheet.theme
+            text: sheet.copyFlash ? qsTr("Copied") : qsTr("Copy code")
+            visible: sheet.role === "host" && sheet.code.length > 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: 52
+            onClicked: {
+                sheet.copyCode(sheet.code)
+                sheet.copyFlash = true
+                copyFlashTimer.restart()
+            }
         }
 
         RowLayout {
@@ -168,10 +205,17 @@ Rectangle {
     }
 
     Timer {
+        id: copyFlashTimer
+        interval: 2000
+        repeat: false
+        running: false
+        onTriggered: sheet.copyFlash = false
+    }
+
+    Timer {
         interval: 2000
         repeat: true
-        running: sheet.visible
-        onTriggered: {
+        running: sheet.visible        onTriggered: {
             if (sheet.role === "host")
                 sheet.pollIncoming()
             else

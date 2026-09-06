@@ -17,6 +17,15 @@ MobileShell {
     property var platform: androidBridge
     property var pendingRequests: ({})
 
+    // Tailnet gate mirror: the platform re-polls on refresh (including the
+    // onResume refresh after a store visit), and platformChanged re-fires
+    // this binding. True while the bridge is absent (previews/tests).
+    Binding {
+        target: host
+        property: "tailscaleInstalled"
+        value: host.platform ? host.platform.tailscaleInstalled !== false : true
+    }
+
     // All core requests, including local reads, use the queued path. The
     // response signal carries the request id so overlapping refreshes cannot
     // mix their payloads.
@@ -103,10 +112,12 @@ MobileShell {
     onOpenChat: {} // bottom-nav Chat tab is the chat surface on mobile
     onOpenSystemSettings: page => host.platform.openSystemSettings(page)
     onRequestOwnNotificationPermission: host.platform.requestOwnNotificationPermission()
-    onOpenPairing: { host.pairingVisible = true; host.refreshServer() }
+    onOpenPairing: { host.pairingVisible = true; host.pairingError = ""; host.refreshServer() }
     onClosePairing: { host.pairingVisible = false; host.request("pairing.reset", {}) }
     onCreatePairingCode: host.pairingCreate()
     onSubmitPairingCode: code => host.pairingSubmit(code)
+    onCopyPairingCode: code => { if (host.platform) host.platform.copyText(code) }
+    onOpenTailscaleStore: { if (host.platform) host.platform.openTailscaleStore() }
     onAcceptPairing: host.pairingAccept()
     onDeclinePairing: host.pairingDecline()
     onCancelPairing: host.pairingCancel()

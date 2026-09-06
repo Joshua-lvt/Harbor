@@ -38,6 +38,21 @@ QString stateName(HarborCoreSupervisor::State state)
 }
 } // namespace
 
+namespace {
+// Pre-pointed Harbor network: the Tailnet client path, the same endpoint the
+// mobile client ships with. Public pinning material, never a secret.
+const QString defaultServerAddress()
+{
+    return QStringLiteral("100.114.220.46:9091");
+}
+
+const QString defaultServerFingerprint()
+{
+    return QStringLiteral(
+        "b9846aed2e97bd741ae5a2a3de9ab37c1831d2372ca67f26f538bd279dd7271f");
+}
+} // namespace
+
 HarborFacade::HarborFacade(HarborCoreSupervisor *supervisor, QObject *parent)
     : QObject(parent)
     , m_supervisor(supervisor)
@@ -849,6 +864,24 @@ void HarborFacade::refreshServerConfig()
     fetchServerConfig();
 }
 
+void HarborFacade::ensureDefaultServer()
+{
+    // The shell nudges on coreReady and on every serverChanged, but the
+    // fetch may not have landed yet (or the core may be down): only a
+    // fetched, still-unconfigured core gets pinned, exactly once per core
+    // session. A failed pin (server unreachable) stays a one-shot too — the
+    // pairing surface reports it honestly instead of retry-looping.
+    if (m_defaultServerEnsured || !m_coreReady || !m_serverConfigFetched)
+        return;
+    m_defaultServerEnsured = true;
+    if (m_serverConfigured)
+        return;
+    sendRequest(QStringLiteral("server.configure"),
+                QJsonObject{{QStringLiteral("address"), defaultServerAddress()},
+                            {QStringLiteral("fingerprint"), defaultServerFingerprint()}},
+                [this](const QJsonObject &payload) { applyServerConfig(payload); });
+}
+
 QString HarborFacade::importProfileAvatar(const QUrl &fileUrl) const
 {
     if (!fileUrl.isLocalFile())
@@ -1071,7 +1104,21 @@ void HarborFacade::refreshActivity()
 void HarborFacade::fetchServerConfig()
 {
     sendRequest(QStringLiteral("server.config"), QJsonObject{},
-                [this](const QJsonObject &payload) { applyServerConfig(payload); });
+                [this](const QJsonObject &payload) {
+                    const bool firstSnapshot = !m_serverConfigFetched;
+                    m_serverConfigFetched = true;
+                    applyServerConfig(payload);
+                    // A fresh core answers "unconfigured" with values equal
+                    // to the facade's initials, so applyServerConfig emits
+                    // nothing — yet the shell must observe the snapshot to
+                    // run the one-shot default pin. Emit once per fetch
+                    // cycle completion, not per value change. (Deliberately
+                    // no ensureDefaultServer() call here: unit tests drive
+                    // this facade without a shell, and must stay hermetic —
+                    // only the QML shell nudges the default pin.)
+                    if (firstSnapshot)
+                        emit serverChanged();
+                });
 }
 
 void HarborFacade::fetchPairedPeers()
@@ -1431,6 +1478,12 @@ void HarborFacade::setCoreReady(bool ready)
         return;
 
     m_coreReady = ready;
+    if (!ready) {
+        // A core restart re-fetches everything, so the one-shot default pin
+        // becomes eligible again on the next session.
+        m_serverConfigFetched = false;
+        m_defaultServerEnsured = false;
+    }
     emit coreReadyChanged();
 }
 

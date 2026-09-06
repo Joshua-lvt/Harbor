@@ -313,6 +313,99 @@ Security posture improves over a public forward: nothing is exposed to
 the internet at all (Tailnet-only), SSH stays LAN-only, and the pin still
 authenticates the server independently of the transport.
 
+### Desktop auto-join (zero-config installs)
+
+Since Harbor 2.1.x the desktop joins the Tailnet by itself on startup
+(`native/HarborTailnet.*`) and pins the server endpoint automatically
+(`HarborFacade::ensureDefaultServer`, same defaults the mobile client
+ships). A fresh install pairs with no manual setup; an existing pin or an
+already-connected personal Tailscale login is never touched.
+
+Admin prerequisites (one time, then §rotation only):
+
+1. Tag the K11+ machine `tag:harbor-server` (Machines → `localhost-0`).
+2. Minimal ACL — the containment for the extractable client key
+   (grants syntax, as the console saves it). Tagged nodes are NOT members,
+   so owner devices need an explicit grant to reach the tagged server —
+   without the member→server grant both netmaps come back empty:
+   ```json
+   "grants": [
+   	{
+   		"src": ["tag:harbor-client"],
+   		"dst": ["tag:harbor-server"],
+   		"ip":  ["tcp:9091"],
+   	},
+   	{
+   		"src": ["autogroup:member"],
+   		"dst": ["tag:harbor-server"],
+   		"ip":  ["tcp:9091"],
+   	},
+   	{
+   		"src": ["autogroup:member"],
+   		"dst": ["autogroup:member"],
+   		"ip":  ["*"],
+   	},
+   	{
+   		"src": ["tag:harbor-client"],
+   		"dst": ["tag:harbor-client"],
+   		"ip":  ["*"],
+   	},
+   	{
+   		"src": ["tag:harbor-client"],
+   		"dst": ["autogroup:member"],
+   		"ip":  ["*"],
+   	},
+   	{
+   		"src": ["autogroup:member"],
+   		"dst": ["tag:harbor-client"],
+   		"ip":  ["*"],
+   	},
+   ],
+   ```
+   The last three exist for the P2P media plane (voice/chat/files travel
+   device-to-device over Tailnet IPs): without them pairing completes but
+   calls never connect audio. Owner-only installs work with the first two
+   grants; all six are required once keyed (ephemeral-client) builds ship.
+3. Settings → Keys → Generate auth key: Reusable ✓, Ephemeral ✓ (the node
+   vanishes when Harbor closes), Tags: `harbor-client`, shortest expiry for
+   the first test, 90 days for production.
+4. GitHub → repo → Settings → Secrets → Actions → `HARBOR_TAILSCALE_AUTHKEY`.
+   The key is compiled into Linux/Windows release binaries only; PR/fork
+   builds stay inert, and it never appears in logs, QML, or argv (staged in
+   a 0600 temp file as `--auth-key=file:PATH`, removed right after use;
+   outputs scrubbed to `tskey-<redacted>`).
+
+Per-machine one-time notes (desktop joins by itself after these):
+
+- Linux: Harbor performs the one-time setup itself — distro client install
+  (native package on Arch, vendor script elsewhere), daemon start, first
+  join and the operator grant — behind a single system-password dialog
+  (`native/HarborTailnet::installClient`). If it reports `needs-admin`
+  instead, run once: `sudo tailscale up --operator=$USER` and relaunch.
+- Windows: install with `harbor-windows-setup.exe` (ships the VC++ 2022
+  runtime and the Tailscale 1.102.3 client, both hash-pinned in
+  `packaging/windows/`). Harbor joins on first launch with its embedded
+  key; the Tailscale tray app stays as the manual fallback.
+- The K11+ server itself is unaffected (manual `up` in Termux, as above).
+
+Rotation (before key expiry — set a reminder, installs stop joining after):
+
+```sh
+# 1. Generate the replacement key (same flags/tags as above).
+# 2. Update the HARBOR_TAILSCALE_AUTHKEY secret.
+# 3. Tag + release; the mandatory updater retires old builds with the dead key.
+```
+
+Kill-switch (suspected key abuse):
+
+```sh
+# 1. Admin console → Settings → Keys → revoke the key (joins stop at once;
+#    existing ephemeral nodes vanish as they go offline).
+# 2. Machines → remove unknown harbor-* ephemeral nodes.
+# 3. Rotate per §rotation. Pairing crypto is unaffected: no code + accept,
+#    no relationship — the key alone never grants a pairing.
+```
+
 ## Supervision: automatic restart (2026-09-05)
 
 Android kills background processes and the Wi-Fi lease moves, so the

@@ -174,6 +174,13 @@ public:
     /// pinning material, never a secret).
     Q_INVOKABLE void configureServer(const QString &address, const QString &fingerprint);
     Q_INVOKABLE void refreshServerConfig();
+    /// Points a fresh install at the Harbor network (Tailnet client path,
+    /// same endpoint the mobile client ships pre-pointed at) when no server
+    /// pin exists yet. One shot per core session; an existing pin is never
+    /// overwritten. The shell calls this on coreReady and serverChanged; the
+    /// facade itself knows whether server.config has been fetched yet, which
+    /// QML cannot observe.
+    Q_INVOKABLE void ensureDefaultServer();
     /// Reads one local image through the native boundary, strips metadata,
     /// bounds its dimensions, and returns only a small embedded PNG data URL.
     /// File URLs and source paths never enter settings or the peer protocol.
@@ -381,6 +388,8 @@ private:
     bool m_serverConfigured = false;
     QString m_serverAddress;
     QString m_serverFingerprint;
+    bool m_serverConfigFetched = false;
+    bool m_defaultServerEnsured = false;
     QVariantList m_pairedPeers;
     bool m_pairedPeersResolved = false;
     QVariantList m_activityTimeline;

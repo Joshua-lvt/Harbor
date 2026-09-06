@@ -1956,7 +1956,15 @@ fn pump<W: Write>(
     state: &Arc<Mutex<CoreState>>,
     output: &mut W,
 ) -> Result<(), CoreError> {
-    let mut next_signal_poll = Instant::now();
+    let mut next_signal_poll = {
+        // The first tick waits a full cadence: the facade's hello (and the
+        // burst of authoritative-state fetches behind it) must be answered
+        // before any polling step, whose server dial can legitimately block
+        // for seconds on a dead route. Afterwards the cadence yields to
+        // requests as before.
+        let core = state.lock().expect("core state mutex");
+        Instant::now() + core.signaling.interval()
+    };
     loop {
         let timeout = next_signal_poll.saturating_duration_since(Instant::now());
         match receiver.recv_timeout(timeout) {

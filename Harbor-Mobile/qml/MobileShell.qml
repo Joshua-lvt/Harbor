@@ -77,6 +77,9 @@ ApplicationWindow {
     property bool mobileToMobileBlocked: false
     property bool pairingVisible: false
     property bool serverConfigured: false
+    // Tailnet gate mirror (host binds the platform reading). True by
+    // default so the standalone shell never blocks pairing in previews.
+    property bool tailscaleInstalled: true
 
     // ---- Mandatory updates (blocking once discovered) ----
     property string updateStatus: "idle"
@@ -142,6 +145,8 @@ ApplicationWindow {
     signal closePairing()
     signal createPairingCode()
     signal submitPairingCode(string code)
+    signal copyPairingCode(string code)
+    signal openTailscaleStore()
     signal acceptPairing()
     signal declinePairing()
     signal cancelPairing()
@@ -279,6 +284,7 @@ ApplicationWindow {
                 onSetReducedMotion: on => shell.setReducedMotion(on)
                 onSetAnimationIntensity: value => shell.setAnimationIntensity(value)
                 onCheckForUpdates: shell.checkForUpdates()
+                onOpenPairing: shell.openPairing()
             }
         }
 
@@ -384,9 +390,12 @@ ApplicationWindow {
         phase: shell.pairingPhase
         errorText: shell.pairingError
         serverConfigured: shell.serverConfigured
+        tailscaleReady: shell.tailscaleInstalled
         busy: shell.pairingBusy
             onCreateCode: shell.createPairingCode()
             onSubmitCode: code => shell.submitPairingCode(code)
+            onCopyCode: code => shell.copyPairingCode(code)
+            onInstallTailscale: shell.openTailscaleStore()
             onAcceptRequest: shell.acceptPairing()
             onDeclineRequest: shell.declinePairing()
             onCancelFlow: shell.cancelPairing()

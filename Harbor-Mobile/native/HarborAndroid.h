@@ -39,6 +39,10 @@ class HarborAndroid final : public QObject
     Q_PROPERTY(QString microphonePermission READ microphonePermission NOTIFY platformChanged)
     Q_PROPERTY(QString ownNotificationPermission READ ownNotificationPermission NOTIFY platformChanged)
     Q_PROPERTY(QString batteryOptimizationPermission READ batteryOptimizationPermission NOTIFY platformChanged)
+    /// Tailscale client presence: Harbor pairs through the Tailnet, so the
+    /// shell gates pairing on this and deep-links to the store page when
+    /// missing. Always true off Android (desktop preview has no gate).
+    Q_PROPERTY(bool tailscaleInstalled READ tailscaleInstalled NOTIFY platformChanged)
 
 public:
     explicit HarborAndroid(QObject *parent = nullptr);
@@ -64,6 +68,7 @@ public:
     QString microphonePermission() const { return m_microphonePermission; }
     QString ownNotificationPermission() const { return m_ownNotificationPermission; }
     QString batteryOptimizationPermission() const { return m_batteryOptimizationPermission; }
+    bool tailscaleInstalled() const { return m_tailscaleInstalled; }
 
     /// Polls every platform source and pushes one `mobile.update` intent's
     /// worth of facts to QML through `platformChanged`. Called on a slow
@@ -94,6 +99,10 @@ public:
     /// A false return means the caller must render an unavailable state.
     Q_INVOKABLE bool ensureCallAudio();
     Q_INVOKABLE void stopCallAudio();
+    /// Copies text verbatim to the system clipboard (pairing codes).
+    Q_INVOKABLE void copyText(const QString &text);
+    /// Deep-links to the Tailscale store page (Tailnet gate).
+    Q_INVOKABLE void openTailscaleStore();
     /// Requests the Android 13+ permission used only for Harbor's own
     /// notifications. It is deliberately separate from listener access.
     Q_INVOKABLE void requestOwnNotificationPermission();
@@ -121,6 +130,7 @@ private:
     void pollPermissions();
     void pollUsage();
     void pollLocation();
+    void pollTailscale();
 
     bool m_batteryAvailable = false;
     int m_batteryPercent = 0;
@@ -143,4 +153,6 @@ private:
     QString m_microphonePermission = QStringLiteral("unknown");
     QString m_ownNotificationPermission = QStringLiteral("unknown");
     QString m_batteryOptimizationPermission = QStringLiteral("unknown");
+    // No gate off Android: the desktop preview never blocks pairing.
+    bool m_tailscaleInstalled = true;
 };

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Harbor Mobile: same identity, same partner, same conversation. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="20100"
-    android:versionName="2.1.0"
+    android:versionCode="20200"
+    android:versionName="2.2.0"
     android:installLocation="auto">
 
     <!-- Network state + internet: control plane, signaling relay, link dial. -->
@@ -31,6 +31,12 @@
     <!-- Mandatory updates: fetch over HTTPS, verify SHA-256, then hand the
          package to the platform installer (system UI, not silent). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Tailnet gate: Harbor pairs through Tailscale, so the shell checks
+         for the client and deep-links to its store page when missing.
+         Scoped to that one package (no broad package-visibility grant). -->
+    <queries>
+        <package android:name="com.tailscale.ipn" />
+    </queries>
     <!-- Usage access and notification-listener access are special grants
          requested from their own settings pages, never at startup. -->
     <!-- SDK versions ride the gradle properties (AGP 9 forbids uses-sdk). -->
@@ -38,6 +44,8 @@
     <application
         android:name="org.qtproject.qt.android.bindings.QtApplication"
         android:label="Harbor"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:supportsRtl="true">
 

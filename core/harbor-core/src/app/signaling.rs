@@ -39,6 +39,11 @@ const PEER_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Partner-presence polls per healthy tick cadence: a 5 s read on the 1 s
 /// loop. The 75 s offline tolerance comfortably covers the gaps.
 const PARTNER_PRESENCE_POLL_TICKS: u64 = 5;
+/// Quiet period between failed connection attempts. A blackholed route burns
+/// the whole 10 s dial timeout on the pump's single thread, so without this
+/// every 5 s backoff tick would wedge request handling for 10 s at a time.
+/// Failed ticks stay fast; the server is retried once per window instead.
+const CONNECT_RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// What one polling step concluded. Offers surface only here; the pump
 /// presents them as an explicit INCOMING state — a call is never answered
@@ -87,6 +92,9 @@ pub struct Signaling {
     peer_checked_at: Option<Instant>,
     legs: Vec<PeerLeg>,
     failures: u32,
+    /// Last `ServerClient::connect` attempt, success or failure. Gates the
+    /// retry cooldown that keeps a dead route from wedging the pump.
+    last_connect_attempt: Option<Instant>,
     /// Healthy ticks since the last partner-presence poll.
     presence_ticks: u64,
 }
@@ -224,6 +232,16 @@ impl Signaling {
             return Err(());
         }
         if self.client.is_none() {
+            // A blackholed route burns the whole dial timeout on the pump's
+            // thread: after a failure, stay quiet until the cooldown lapses
+            // instead of wedging every backoff tick behind a fresh dial.
+            if self
+                .last_connect_attempt
+                .is_some_and(|at| at.elapsed() < CONNECT_RETRY_COOLDOWN)
+            {
+                return Err(());
+            }
+            self.last_connect_attempt = Some(Instant::now());
             self.client = ServerClient::connect(pin).ok();
         }
         if self.client.is_none() {

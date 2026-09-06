@@ -132,7 +132,12 @@ QtObject {
     }
 
     function mockCopy(value, target) {
-        if (live)
+        // Harbor ID and pairing-code copies must reach the real system
+        // clipboard whenever the facade exists — even while the core is
+        // reconnecting (live === false). Gating on `live` showed a "copied"
+        // feedback while copying nothing, leaving the previous pairing code
+        // on the clipboard. Pairing actions below still require `live`.
+        if (facade)
             facade.copyToClipboard(String(value || ""))
         mockCopyTarget = String(target || "pairingCode")
         mockCopyFeedbackVisible = true

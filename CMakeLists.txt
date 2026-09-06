@@ -80,6 +80,7 @@ add_custom_target(harbor_media_build DEPENDS "${HARBOR_MEDIA_BINARY}")
 
 qt_add_executable(harbor
     main.cpp
+    $<$<BOOL:${WIN32}>:${CMAKE_SOURCE_DIR}/packaging/harbor.rc>
     native/HarborAppIcon.cpp
     native/HarborAppIcon.h
     native/HarborCoreSupervisor.cpp
@@ -98,6 +99,8 @@ qt_add_executable(harbor
     native/HarborPresenceSource.h
     native/HarborSounds.cpp
     native/HarborSounds.h
+    native/HarborTailnet.cpp
+    native/HarborTailnet.h
     native/HarborUpdater.cpp
     native/HarborUpdater.h
 )
@@ -236,6 +239,13 @@ if(WIN32)
     # still lands in the debugger / `qDebug` sinks.
     set_target_properties(harbor PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
+# Zero-config Tailnet join: the pre-auth key arrives as a CI secret at build
+# time and is compiled into the desktop binary ONLY when present. Source
+# checkouts and PR builds stay inert (adapter reports "disabled"). See
+# native/HarborTailnet.h for the threat model; the key is never committed.
+if(DEFINED ENV{HARBOR_TAILSCALE_AUTHKEY} AND NOT "$ENV{HARBOR_TAILSCALE_AUTHKEY}" STREQUAL "")
+    target_compile_definitions(harbor PRIVATE HARBOR_TAILSCALE_AUTHKEY="$ENV{HARBOR_TAILSCALE_AUTHKEY}")
+endif()
 if(TARGET Qt6::DBus)
     target_link_libraries(harbor PRIVATE Qt6::DBus)
     target_compile_definitions(harbor PRIVATE HARBOR_HAVE_DBUS=1)
@@ -270,7 +280,8 @@ install(PROGRAMS "${HARBOR_CORE_BINARY}" "${HARBOR_MEDIA_BINARY}" DESTINATION bi
 if(UNIX AND NOT APPLE)
     # Linux desktop integration for the real tray icon and the XDG autostart
     # entry: the icon name here must match the one HarborTray looks up.
-    # Windows carries its own icon resource and Startup-folder shortcut, so
+    # Windows embeds its icon instead (packaging/harbor.rc +
+    # packaging/icons/harbor.ico) plus a Startup-folder shortcut, so
     # these files stay out of non-Linux packages.
     install(FILES packaging/harbor.desktop DESTINATION share/applications)
     install(DIRECTORY packaging/icons/hicolor DESTINATION share/icons)

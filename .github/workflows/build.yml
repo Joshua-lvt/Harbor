@@ -124,6 +124,10 @@ jobs:
           cache-dependency-path: media/go.sum
 
       - name: Configure, build, test
+        env:
+          # Pre-auth Tailnet key (Settings → Secrets → Actions). Absent in
+          # forks/PRs: the desktop then ships with auto-join inert. Never logged.
+          HARBOR_TAILSCALE_AUTHKEY: ${{ secrets.HARBOR_TAILSCALE_AUTHKEY }}
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -203,6 +207,9 @@ jobs:
 
       - name: Configure, build, test
         shell: pwsh
+        env:
+          # Same Tailnet pre-auth key as Linux; see the comment there.
+          HARBOR_TAILSCALE_AUTHKEY: ${{ secrets.HARBOR_TAILSCALE_AUTHKEY }}
         run: |
           $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
 
@@ -237,6 +244,53 @@ jobs:
           find . -maxdepth 7 -type f \
             -name "*.exe" \
             -print | sort || true
+
+      - name: Install NSIS (installer compiler)
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Fetch Windows installer dependencies (pinned, hash-verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $deps = Join-Path $PWD "dist\win-deps"
+
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+
+          $tsVersion = (Get-Content packaging/windows/TAILSCALE_VERSION -Raw).Trim()
+          $tsHash = (Get-Content packaging/windows/TAILSCALE_MSI_SHA256 -Raw).Trim()
+
+          $msi = Join-Path $deps "tailscale.msi"
+
+          Write-Host "Downloading Tailscale $tsVersion ..."
+          Invoke-WebRequest `
+            -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" `
+            -OutFile $msi
+
+          $got = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+
+          if ($got -ne $tsHash) {
+            throw "Tailscale MSI hash mismatch: got $got, want $tsHash"
+          }
+
+          Write-Host "OK: tailscale.msi ($tsVersion)"
+
+          $vcUrl = (Get-Content packaging/windows/VCREDIST_URL -Raw).Trim()
+          $vcHash = (Get-Content packaging/windows/VCREDIST_SHA256 -Raw).Trim()
+
+          $vc = Join-Path $deps "vc_redist.x64.exe"
+
+          Write-Host "Downloading VC++ 2022 redistributable ..."
+          Invoke-WebRequest -Uri $vcUrl -OutFile $vc
+
+          $gotVc = (Get-FileHash $vc -Algorithm SHA256).Hash.ToLower()
+
+          if ($gotVc -ne $vcHash) {
+            throw "VC++ redist hash mismatch: got $gotVc, want $vcHash. Microsoft rotated the evergreen binary: download it, verify the publisher signature, and update packaging/windows/VCREDIST_SHA256."
+          }
+
+          Write-Host "OK: vc_redist.x64.exe"
 
       - name: Package Windows release with Qt dependencies
         if: startsWith(github.ref, 'refs/tags/v')
@@ -523,6 +577,58 @@ jobs:
           Write-Host "SHA256:"
           Write-Host "  $hash"
 
+      - name: Build Windows installer (NSIS)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          $stage = Join-Path $PWD "dist\harbor-windows-x86_64"
+          $deps = Join-Path $PWD "dist\win-deps"
+          $exe = Join-Path $PWD "harbor-windows-setup.exe"
+
+          if (-not (Test-Path $stage)) {
+            throw "Stage directory not found: $stage"
+          }
+
+          $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
+
+          if (-not (Test-Path $makensis)) {
+            throw "makensis.exe was not found at $makensis"
+          }
+
+          Write-Host "Building Harbor $version installer..."
+
+          & $makensis `
+            "/DVERSION=$version" `
+            "/DSTAGEDIR=$stage" `
+            "/DDEPSDIR=$deps" `
+            "/DOUTFILE=$exe" `
+            "$PWD\packaging\windows\harbor.nsi"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Installer built: $exe"
+
+      - name: Checksum the Windows installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $hash = (
+            Get-FileHash `
+              "harbor-windows-setup.exe" `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          Set-Content `
+            -Path "harbor-windows-setup.exe.sha256" `
+            -Value $hash
+
+          Write-Host "Installer SHA256:"
+          Write-Host "  $hash"
+
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
@@ -531,6 +637,8 @@ jobs:
           path: |
             harbor-windows-x86_64.zip
             harbor-windows-x86_64.zip.sha256
+            harbor-windows-setup.exe
+            harbor-windows-setup.exe.sha256
 
   android:
     needs: [version-check, qt-desktop-kit]
@@ -713,6 +821,8 @@ jobs:
             harbor-linux-x86_64.tar.gz.sha256
             harbor-windows-x86_64.zip
             harbor-windows-x86_64.zip.sha256
+            harbor-windows-setup.exe
+            harbor-windows-setup.exe.sha256
             harbor-android-arm64-debug.apk
             harbor-android-arm64-debug.apk.sha256
           generate_release_notes: true
@@ -720,5 +830,6 @@ jobs:
             Harbor ${{ github.ref_name }} — updates install themselves on every version (mandatory once discovered; offline never bricks the app).
 
             - **PC Linux** (`harbor-linux-x86_64.tar.gz`): ready for daily use.
-            - **PC Windows** (`harbor-windows-x86_64.zip`): ready for daily use.
+            - **PC Windows installer** (`harbor-windows-setup.exe`, recommended): bundles the VC++ 2022 runtime and the Tailscale client; Harbor joins the Tailnet itself on first launch.
+            - **PC Windows portable** (`harbor-windows-x86_64.zip`): no install, needs the Tailscale client alongside.
             - **Android** (`harbor-android-arm64-debug.apk`): 🚧 still testing — debug-signed, Tailnet path, emulator-proven.

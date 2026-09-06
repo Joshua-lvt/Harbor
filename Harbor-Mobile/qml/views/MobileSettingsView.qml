@@ -49,6 +49,7 @@ ScrollView {
     signal setSharePhoneNotifications(bool on)
     signal openSystemSettings(string page)
     signal requestOwnNotificationPermission()
+    signal openPairing()
 
     readonly property bool locationEffective: view.locationSharing
         && view.locationPermission === "granted"
@@ -87,6 +88,26 @@ ScrollView {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
                     onClicked: view.checkForUpdates()
+                }
+            }
+        }
+
+        GroupBox {
+            title: qsTr("Pairing")
+            Layout.fillWidth: true
+            ColumnLayout {
+                Label {
+                    text: qsTr("Link this phone with your partner's device. Always available, even when already paired.")
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                MobileButton {
+                    text: qsTr("Pair with partner")
+                    theme: view.theme
+                    primary: true
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48
+                    onClicked: view.openPairing()
                 }
             }
         }

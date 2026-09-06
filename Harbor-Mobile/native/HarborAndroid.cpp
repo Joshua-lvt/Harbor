@@ -12,6 +12,11 @@
 #include <QCryptographicHash>
 #include <QStandardPaths>
 
+#ifndef Q_OS_ANDROID
+#include <QClipboard>
+#include <QGuiApplication>
+#endif
+
 #ifdef Q_OS_ANDROID
 #include <jni.h>
 #include <QJniObject>
@@ -81,6 +86,7 @@ void HarborAndroid::refresh()
     pollPermissions();
     pollUsage();
     pollLocation();
+    pollTailscale();
     emit platformChanged();
 }
 
@@ -384,6 +390,44 @@ void HarborAndroid::pollPermissions()
         QStringLiteral("unknown");
     m_microphonePermission = m_ownNotificationPermission = QStringLiteral("unknown");
     m_backgroundLocationPermission = m_batteryOptimizationPermission = QStringLiteral("unknown");
+#endif
+}
+
+void HarborAndroid::pollTailscale()
+{
+#ifdef Q_OS_ANDROID
+    QJniObject context = activity();
+    m_tailscaleInstalled = QJniObject::callStaticMethod<jboolean>(
+        "org/harbor/mobile/HarborMobileActivity", "isTailscaleInstalled",
+        "(Landroid/content/Context;)Z", context.object());
+#else
+    // Desktop preview: no gate.
+    m_tailscaleInstalled = true;
+#endif
+}
+
+void HarborAndroid::copyText(const QString &text)
+{
+#ifdef Q_OS_ANDROID
+    QJniObject context = activity();
+    QJniObject jText = QJniObject::fromString(text);
+    QJniObject::callStaticMethod<void>(
+        "org/harbor/mobile/HarborMobileActivity", "copyText",
+        "(Landroid/content/Context;Ljava/lang/String;)V", context.object(),
+        jText.object<jstring>());
+#else
+    if (QGuiApplication::instance() != nullptr)
+        QGuiApplication::clipboard()->setText(text);
+#endif
+}
+
+void HarborAndroid::openTailscaleStore()
+{
+#ifdef Q_OS_ANDROID
+    QJniObject context = activity();
+    QJniObject::callStaticMethod<void>(
+        "org/harbor/mobile/HarborMobileActivity", "openTailscaleStore",
+        "(Landroid/content/Context;)V", context.object());
 #endif
 }
 

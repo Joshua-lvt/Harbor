@@ -62,6 +62,59 @@ public class HarborMobileActivity extends QtActivity {
         }
     }
 
+    // ---- clipboard (pairing codes copy verbatim, never reformatted) ----
+
+    public static void copyText(Context context, String text) {
+        try {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager)
+                            context.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) {
+                return;
+            }
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "Harbor", text == null ? "" : text));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // ---- Tailnet gate (Harbor pairs through Tailscale) ----
+
+    /** True when the Tailscale client is installed (any login state). */
+    public static boolean isTailscaleInstalled(Context context) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.getPackageManager().getPackageInfo(
+                        "com.tailscale.ipn",
+                        PackageManager.PackageInfoFlags.of(0));
+            } else {
+                context.getPackageManager().getPackageInfo("com.tailscale.ipn", 0);
+            }
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /** Deep-link to the Tailscale store page (Play app, HTTPS fallback). */
+    public static void openTailscaleStore(Context context) {
+        try {
+            Intent market = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("market://details?id=com.tailscale.ipn"));
+            market.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(market);
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse(
+                    "https://play.google.com/store/apps/details?id=com.tailscale.ipn"));
+            web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(web);
+        } catch (Exception ignored) {
+        }
+    }
+
     // ---- usage access (special grant, no runtime dialog) ----
 
     /** 0 allowed, 1 denied/unknown-checked, -1 manager missing. */
