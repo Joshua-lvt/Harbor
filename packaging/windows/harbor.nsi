@@ -74,10 +74,26 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 !insertmacro MUI_LANGUAGE "PortugueseBR"
 !insertmacro MUI_LANGUAGE "English"
 
+Function .onInit
+  ; Explicit temp-dir init across NSIS versions; $PLUGINSDIR is removed
+  ; automatically when the installer exits.
+  InitPluginsDir
+FunctionEnd
+
 Section "Harbor (required)" SectionMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "${STAGEDIR}\*.*"
+
+  ; Third-party installers travel INSIDE this setup: a compile-time CI path
+  ; does not exist on the user's PC (referencing it fails with msiexec 1619
+  ; / missing-file errors). Extract to the temp plugins dir (auto-removed
+  ; after install) and chain from there. A missing source fails the build
+  ; here instead of failing silently on the user's machine.
+  SetOutPath "$PLUGINSDIR"
+  File "${DEPSDIR}\vc_redist.x64.exe"
+  File "${DEPSDIR}\tailscale.msi"
+  SetOutPath "$INSTDIR"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "Software\Harbor" "InstallDir" "$INSTDIR"
@@ -104,7 +120,7 @@ Section "Harbor (required)" SectionMain
   ; Official VC++ 2022 runtime (Qt requires the redistributable package).
   ; Quiet, idempotent: a present runtime returns success immediately.
   DetailPrint "Installing Microsoft Visual C++ 2022 runtime..."
-  ExecWait '"${DEPSDIR}\vc_redist.x64.exe" /quiet /norestart' $0
+  ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /quiet /norestart' $0
   ${If} $0 != 0
   ${AndIf} $0 != 1638
   ${AndIf} $0 != 3010
@@ -121,7 +137,7 @@ Section "Harbor (required)" SectionMain
     DetailPrint "Tailscale already installed, skipping."
   ${Else}
     DetailPrint "Installing Tailscale (silent)..."
-    ExecWait 'msiexec /i "${DEPSDIR}\tailscale.msi" /quiet /norestart' $1
+    ExecWait 'msiexec /i "$PLUGINSDIR\tailscale.msi" /quiet /norestart' $1
     ${If} $1 != 0
     ${AndIf} $1 != 1638
     ${AndIf} $1 != 3010
