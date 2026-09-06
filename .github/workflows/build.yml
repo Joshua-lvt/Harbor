@@ -384,6 +384,29 @@ jobs:
             (Join-Path $stage "harbor-media.exe") `
             -Force
 
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Media worker native dependencies"
+          Write-Host "========================================"
+
+          # harbor-media.exe links Opus dynamically (CGO): the DLL must ship
+          # beside it or Windows refuses to start it ("libopus-0.dll não foi
+          # encontrado"). It comes from the same MSYS2 package the media
+          # worker compiles against, so no download or version guesswork.
+          $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
+          $opusDll = "$msys/mingw64/bin/libopus-0.dll"
+
+          if (-not (Test-Path $opusDll)) {
+            throw "libopus-0.dll was not found at $opusDll"
+          }
+
+          Copy-Item `
+            $opusDll `
+            (Join-Path $stage "libopus-0.dll") `
+            -Force
+
+          Write-Host "OK: libopus-0.dll"
+
           Set-Content `
             -Path (Join-Path $stage "version.txt") `
             -Value $version `
