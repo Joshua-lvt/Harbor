@@ -19,13 +19,14 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 env:
-  # Desktop kits ride the last fully-mirrored Qt (aqtinstall cannot parse
-  # the newer nested repo layout yet). The Android target stays on the
-  # local kit, which alone supports this repo's NDK 28 / API 35 toolchain.
+  # Last Qt with flat aqtinstall metadata on every target (6.9+ moved to a
+  # nested repo layout aqt 3.3.0 cannot parse). This also pins CI to the LTS
+  # near our 6.5 floor while development rides newer local kits.
   QT_VERSION_DESKTOP: "6.8.3"
-  QT_VERSION_ANDROID: "6.11.2"
+  QT_VERSION_ANDROID: "6.8.3"
 
 jobs:
   version-check:
@@ -94,8 +95,9 @@ jobs:
           cache-key-prefix: install-qt-linux
       - name: Verify Qt kit completeness
         run: |
-          test -x "$QT_ROOT_DIR/bin/moc" || { echo "incomplete Qt kit"; exit 1; }
-          test -x "$QT_ROOT_DIR/bin/qt-cmake" || { echo "incomplete Qt kit"; exit 1; }
+          test -x "$QT_ROOT_DIR/bin/qt-cmake" || { echo "incomplete Qt kit (qt-cmake missing)"; exit 1; }
+          test -x "$QT_ROOT_DIR/bin/qmake" || test -x "$QT_ROOT_DIR/bin/qmake6" || { echo "incomplete Qt kit (qmake missing)"; exit 1; }
+          test -x "$QT_ROOT_DIR/bin/moc" || test -x "$QT_ROOT_DIR/libexec/moc" || { echo "incomplete Qt kit (moc missing)"; exit 1; }
           du -sh "$QT_ROOT_DIR"
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
@@ -225,7 +227,9 @@ jobs:
           mkdir -p "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
           tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
             -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/moc"
+          QT_HOST_ROOT="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64"
+          test -x "$QT_HOST_ROOT/bin/qmake" || test -x "$QT_HOST_ROOT/bin/qmake6" || { echo "missing host qmake"; exit 1; }
+          test -x "$QT_HOST_ROOT/bin/moc" || test -x "$QT_HOST_ROOT/libexec/moc" || { echo "missing host moc"; exit 1; }
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
@@ -233,11 +237,7 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: false # partial trees once poisoned the shared cache; always fetch fresh
-      - name: Verify Android kit completeness
-        run: |
-          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/lib/cmake/Qt6Core/" | head -8
-          test -f "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/lib/cmake/Qt6Core/Qt6CoreConfig.cmake"
-          du -sh "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
+          cache-key-prefix: install-qt-android
       - name: Link Qt kits into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
@@ -252,8 +252,11 @@ jobs:
           mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
           ln -sfn "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64" \
             "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
-          test -x "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64/bin/moc" \
-            || { echo "missing host kit link"; exit 1; }
+          QT_HOST_ROOT="$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
+          test -x "$QT_HOST_ROOT/bin/qmake" || test -x "$QT_HOST_ROOT/bin/qmake6" \
+            || { echo "missing host kit qmake link"; exit 1; }
+          test -x "$QT_HOST_ROOT/bin/moc" || test -x "$QT_HOST_ROOT/libexec/moc" \
+            || { echo "missing host kit moc link"; exit 1; }
           echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
       - name: Rust with Android target
         uses: dtolnay/rust-toolchain@stable
