@@ -19,6 +19,7 @@ jobs:
   version-check:
     needs: []
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -221,81 +222,306 @@ jobs:
 
           ctest --test-dir build --output-on-failure
 
-      # Important:
-      # Do not assume the executables are in build/Release/.
-      # Ninja/CMake may place them directly under build/ or in another
-      # subdirectory depending on the target configuration.
       - name: Debug Windows build output
         shell: bash
         run: |
           echo "=== build directory ==="
+
           find build -maxdepth 6 -type f \
             \( -name "*.exe" -o -name "*.dll" \) \
             -print | sort || true
 
           echo
           echo "=== repository executables ==="
+
           find . -maxdepth 7 -type f \
             -name "*.exe" \
             -print | sort || true
 
-      - name: Package release zip
+      - name: Package Windows release with Qt dependencies
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
 
-          VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
+          $version = (Get-Content VERSION.txt -Raw).Trim()
 
-          mkdir -p dist/harbor-windows-x86_64
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "VERSION.txt is empty."
+          }
 
-          echo "=== Locating Windows executables ==="
+          $stage = Join-Path $PWD "dist\harbor-windows-x86_64"
 
-          HARBOR_EXE="$(find build -type f -name 'harbor.exe' -print -quit)"
-          HARBOR_CORE_EXE="$(find build -type f -name 'harbor-core.exe' -print -quit)"
-          HARBOR_MEDIA_EXE="$(find build -type f -name 'harbor-media.exe' -print -quit)"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-          echo "harbor.exe:      ${HARBOR_EXE:-NOT FOUND}"
-          echo "harbor-core.exe: ${HARBOR_CORE_EXE:-NOT FOUND}"
-          echo "harbor-media.exe:${HARBOR_MEDIA_EXE:-NOT FOUND}"
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Locating Harbor executables"
+          Write-Host "========================================"
 
-          if [ -z "$HARBOR_EXE" ]; then
-            echo "ERROR: harbor.exe was not found."
-            echo "Full build output:"
-            find build -maxdepth 7 -type f -print | sort || true
+          $harborExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborCoreExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-core.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborMediaExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-media.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $harborExe) {
+            Write-Host "ERROR: harbor.exe was not found."
+            Write-Host ""
+            Write-Host "Available executables:"
+            Get-ChildItem build -Recurse -File |
+              Where-Object { $_.Extension -eq ".exe" } |
+              Select-Object FullName
+
             exit 1
-          fi
+          }
 
-          if [ -z "$HARBOR_CORE_EXE" ]; then
-            echo "ERROR: harbor-core.exe was not found."
-            echo "Full build output:"
-            find build -maxdepth 7 -type f -print | sort || true
+          if (-not $harborCoreExe) {
+            Write-Host "ERROR: harbor-core.exe was not found."
             exit 1
-          fi
+          }
 
-          if [ -z "$HARBOR_MEDIA_EXE" ]; then
-            echo "ERROR: harbor-media.exe was not found."
-            echo "Full build output:"
-            find build -maxdepth 7 -type f -print | sort || true
+          if (-not $harborMediaExe) {
+            Write-Host "ERROR: harbor-media.exe was not found."
             exit 1
-          fi
+          }
 
-          cp "$HARBOR_EXE" \
-             "$HARBOR_CORE_EXE" \
-             "$HARBOR_MEDIA_EXE" \
-             dist/harbor-windows-x86_64/
+          Write-Host "harbor.exe:"
+          Write-Host "  $($harborExe.FullName)"
 
-          echo "$VERSION" > dist/harbor-windows-x86_64/version.txt
+          Write-Host "harbor-core.exe:"
+          Write-Host "  $($harborCoreExe.FullName)"
 
-          echo
-          echo "=== Windows package contents ==="
-          find dist/harbor-windows-x86_64 -maxdepth 1 -type f -print | sort
+          Write-Host "harbor-media.exe:"
+          Write-Host "  $($harborMediaExe.FullName)"
 
-          (cd dist && 7z a ../harbor-windows-x86_64.zip harbor-windows-x86_64)
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Copying Harbor executables"
+          Write-Host "========================================"
 
-          sha256sum harbor-windows-x86_64.zip \
-            | awk '{print $1}' \
-            > harbor-windows-x86_64.zip.sha256
+          Copy-Item `
+            $harborExe.FullName `
+            (Join-Path $stage "harbor.exe") `
+            -Force
+
+          Copy-Item `
+            $harborCoreExe.FullName `
+            (Join-Path $stage "harbor-core.exe") `
+            -Force
+
+          Copy-Item `
+            $harborMediaExe.FullName `
+            (Join-Path $stage "harbor-media.exe") `
+            -Force
+
+          Set-Content `
+            -Path (Join-Path $stage "version.txt") `
+            -Value $version `
+            -NoNewline
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt deployment"
+          Write-Host "========================================"
+
+          $windeployqt = Join-Path `
+            $env:QT_ROOT_DIR `
+            "bin\windeployqt.exe"
+
+          Write-Host "QT_ROOT_DIR:"
+          Write-Host "  $env:QT_ROOT_DIR"
+
+          Write-Host "windeployqt:"
+          Write-Host "  $windeployqt"
+
+          if (-not (Test-Path $windeployqt)) {
+            Write-Host ""
+            Write-Host "ERROR: windeployqt.exe was not found."
+
+            Write-Host ""
+            Write-Host "Qt bin directory:"
+            Get-ChildItem `
+              (Join-Path $env:QT_ROOT_DIR "bin") `
+              -File |
+              Select-Object Name
+
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "Running windeployqt..."
+
+          & $windeployqt `
+            --release `
+            --compiler-runtime `
+            --qmldir "$PWD\qml" `
+            --dir "$stage" `
+            "$stage\harbor.exe"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: windeployqt failed."
+            Write-Host "Exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+          Write-Host ""
+          Write-Host "windeployqt completed successfully."
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Validating Qt deployment"
+          Write-Host "========================================"
+
+          $requiredQtDlls = @(
+            "Qt6Core.dll",
+            "Qt6Gui.dll",
+            "Qt6Widgets.dll",
+            "Qt6Network.dll",
+            "Qt6Qml.dll",
+            "Qt6Quick.dll"
+          )
+
+          foreach ($dll in $requiredQtDlls) {
+            $dllPath = Join-Path $stage $dll
+
+            if (-not (Test-Path $dllPath)) {
+              throw "Required Qt DLL was not deployed: $dll"
+            }
+
+            Write-Host "OK: $dll"
+          }
+
+          $platformPlugin = Join-Path `
+            $stage `
+            "platforms\qwindows.dll"
+
+          if (-not (Test-Path $platformPlugin)) {
+            throw "Qt Windows platform plugin was not deployed: platforms/qwindows.dll"
+          }
+
+          Write-Host "OK: platforms/qwindows.dll"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt DLLs"
+          Write-Host "========================================"
+
+          Get-ChildItem `
+            $stage `
+            -Filter "Qt6*.dll" |
+            Sort-Object Name |
+            Select-Object Name, Length
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt platform plugins"
+          Write-Host "========================================"
+
+          if (Test-Path "$stage\platforms") {
+            Get-ChildItem `
+              "$stage\platforms" `
+              -File |
+              Sort-Object Name |
+              Select-Object Name, Length
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "QML deployment"
+          Write-Host "========================================"
+
+          $qmlDirectories = @(
+            "QtQml",
+            "QtQuick"
+          )
+
+          foreach ($qmlDir in $qmlDirectories) {
+            $qmlPath = Join-Path $stage $qmlDir
+
+            if (Test-Path $qmlPath) {
+              Write-Host "OK: $qmlDir"
+            }
+            else {
+              Write-Host "INFO: $qmlDir was not created by windeployqt"
+            }
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Final Windows package contents"
+          Write-Host "========================================"
+
+          Get-ChildItem `
+            $stage `
+            -Recurse `
+            -File |
+            Sort-Object FullName |
+            Select-Object FullName, Length
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Creating ZIP"
+          Write-Host "========================================"
+
+          $zip = Join-Path `
+            $PWD `
+            "harbor-windows-x86_64.zip"
+
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+
+          & 7z a `
+            -tzip `
+            $zip `
+            "$stage\*"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: 7z failed."
+            Write-Host "Exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Generating SHA256"
+          Write-Host "========================================"
+
+          $hash = (
+            Get-FileHash `
+              $zip `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          Set-Content `
+            -Path "harbor-windows-x86_64.zip.sha256" `
+            -Value $hash
+
+          Write-Host ""
+          Write-Host "Windows package created successfully:"
+          Write-Host "  $zip"
+
+          Write-Host ""
+          Write-Host "SHA256:"
+          Write-Host "  $hash"
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
