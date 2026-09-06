@@ -215,7 +215,8 @@ Rectangle {
     Timer {
         interval: 2000
         repeat: true
-        running: sheet.visible        onTriggered: {
+        running: sheet.visible
+        onTriggered: {
             if (sheet.role === "host")
                 sheet.pollIncoming()
             else

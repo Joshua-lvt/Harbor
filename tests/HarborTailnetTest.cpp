@@ -4,6 +4,11 @@
 // daemon is ever touched. One test pins the core security property: the
 // pre-auth key travels in a 0600 file referenced as --auth-key=file:PATH
 // and never appears in argv.
+//
+// The stub is a tiny dependency-free program built by CMake as `tailscale`
+// (POSIX) / `tailscale.exe` (Windows) — a shell script cannot stand in,
+// because production resolves `tailscale.exe` on Windows and POSIX scripts
+// do not execute there.
 #include "HarborTailnet.h"
 
 #include <QDir>
@@ -11,45 +16,17 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#ifndef HARBOR_TAILSCALE_STUB_DIR
+#error "HARBOR_TAILSCALE_STUB_DIR must point at the built tailscale stub"
+#endif
+
 namespace {
 
-const char kStubScript[] =
-    "#!/bin/sh\n"
-    "echo \"$1 argv:$*\" >> \"$STUB_LOG\"\n"
-    "case \"$1\" in\n"
-    "  status)\n"
-    "    if grep -q logged-in \"$STUB_STATE\" 2>/dev/null; then\n"
-    "      echo \"100.99.99.99  stub-node  tester  linux  -\"\n"
-    "      exit 0\n"
-    "    else\n"
-    "      echo \"Logged out.\" >&2\n"
-    "      exit 1\n"
-    "    fi\n"
-    "    ;;\n"
-    "  up)\n"
-    "    if [ \"$STUB_DENY\" = \"permission\" ]; then\n"
-    "      echo \"Error: tailscaled needs root or operator\" >&2\n"
-    "      exit 1\n"
-    "    fi\n"
-    "    if [ \"$STUB_DENY\" = \"down\" ]; then\n"
-    "      echo \"Error: failed to connect to local tailscaled\" >&2\n"
-    "      exit 1\n"
-    "    fi\n"
-    "    keyfile=\"\"\n"
-    "    for a in \"$@\"; do\n"
-    "      case \"$a\" in\n"
-    "        *file:*) keyfile=\"${a##*file:}\" ;;\n"
-    "      esac\n"
-    "    done\n"
-    "    if [ -z \"$keyfile\" ] || [ ! -f \"$keyfile\" ]; then\n"
-    "      echo \"Error: no auth key\" >&2\n"
-    "      exit 1\n"
-    "    fi\n"
-    "    echo \"up KEYFILE_CONTENT:$(cat \"$keyfile\")\" >> \"$STUB_LOG\"\n"
-    "    echo logged-in > \"$STUB_STATE\"\n"
-    "    exit 0\n"
-    "    ;;\n"
-    "esac\n";
+/// Directory holding the compiled stub for this platform.
+QString tailnetStubDir()
+{
+    return QStringLiteral(HARBOR_TAILSCALE_STUB_DIR);
+}
 
 QString readLog(const QString &path)
 {
@@ -78,32 +55,23 @@ private slots:
 
 void HarborTailnetTest::leavesConnectedClientAlone()
 {
-    QTemporaryDir stubDir;
-    QVERIFY(stubDir.isValid());
-    QFile stub(stubDir.filePath(QStringLiteral("tailscale")));
-    QVERIFY(stub.open(QIODevice::WriteOnly));
-    QVERIFY(stub.write(kStubScript) > 0);
-    stub.close();
-    QVERIFY(QFile::setPermissions(
-        stub.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                             | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                             | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                             | QFileDevice::ExeOther));
-    QFile state(stubDir.filePath(QStringLiteral("state")));
+    QTemporaryDir stateDir;
+    QVERIFY(stateDir.isValid());
+    QFile state(stateDir.filePath(QStringLiteral("state")));
     QVERIFY(state.open(QIODevice::WriteOnly));
     QVERIFY(state.write("logged-in") > 0);
     state.close();
 
-    qputenv("STUB_LOG", stubDir.filePath(QStringLiteral("log")).toUtf8());
+    qputenv("STUB_LOG", stateDir.filePath(QStringLiteral("log")).toUtf8());
     qputenv("STUB_STATE", state.fileName().toUtf8());
     qputenv("STUB_DENY", "");
 
     HarborTailnet tailnet;
-    tailnet.setPathOverride(stubDir.path());
+    tailnet.setPathOverride(tailnetStubDir());
     tailnet.ensureJoined();
     QCOMPARE(tailnet.status(), QStringLiteral("connected"));
     // A personal, already-connected login must never see an `up`.
-    QVERIFY(!readLog(stubDir.filePath(QStringLiteral("log"))).contains(QStringLiteral("up ")));
+    QVERIFY(!readLog(stateDir.filePath(QStringLiteral("log"))).contains(QStringLiteral("up ")));
 
     qunsetenv("STUB_LOG");
     qunsetenv("STUB_STATE");
@@ -112,28 +80,19 @@ void HarborTailnetTest::leavesConnectedClientAlone()
 
 void HarborTailnetTest::joinsLoggedOutClientWithoutLeakingTheKey()
 {
-    QTemporaryDir stubDir;
-    QVERIFY(stubDir.isValid());
-    QFile stub(stubDir.filePath(QStringLiteral("tailscale")));
-    QVERIFY(stub.open(QIODevice::WriteOnly));
-    QVERIFY(stub.write(kStubScript) > 0);
-    stub.close();
-    QVERIFY(QFile::setPermissions(
-        stub.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                             | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                             | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                             | QFileDevice::ExeOther));
+    QTemporaryDir stateDir;
+    QVERIFY(stateDir.isValid());
 
-    qputenv("STUB_LOG", stubDir.filePath(QStringLiteral("log")).toUtf8());
-    qputenv("STUB_STATE", stubDir.filePath(QStringLiteral("state")).toUtf8());
+    qputenv("STUB_LOG", stateDir.filePath(QStringLiteral("log")).toUtf8());
+    qputenv("STUB_STATE", stateDir.filePath(QStringLiteral("state")).toUtf8());
     qputenv("STUB_DENY", "");
 
     HarborTailnet tailnet;
-    tailnet.setPathOverride(stubDir.path());
+    tailnet.setPathOverride(tailnetStubDir());
     tailnet.ensureJoined();
     QCOMPARE(tailnet.status(), QStringLiteral("connected"));
 
-    const QString log = readLog(stubDir.filePath(QStringLiteral("log")));
+    const QString log = readLog(stateDir.filePath(QStringLiteral("log")));
     // The join happened with the key staged in a file …
     QVERIFY(log.contains(QStringLiteral("up KEYFILE_CONTENT:tskey-auth-test-only-0000")));
     // … while no argv line ever carried the credential (`ps`-safe).
@@ -161,24 +120,15 @@ void HarborTailnetTest::missingClientReportsMissing()
 
 void HarborTailnetTest::permissionRefusalReportsNeedsAdmin()
 {
-    QTemporaryDir stubDir;
-    QVERIFY(stubDir.isValid());
-    QFile stub(stubDir.filePath(QStringLiteral("tailscale")));
-    QVERIFY(stub.open(QIODevice::WriteOnly));
-    QVERIFY(stub.write(kStubScript) > 0);
-    stub.close();
-    QVERIFY(QFile::setPermissions(
-        stub.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                             | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                             | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                             | QFileDevice::ExeOther));
+    QTemporaryDir stateDir;
+    QVERIFY(stateDir.isValid());
 
-    qputenv("STUB_LOG", stubDir.filePath(QStringLiteral("log")).toUtf8());
-    qputenv("STUB_STATE", stubDir.filePath(QStringLiteral("state")).toUtf8());
+    qputenv("STUB_LOG", stateDir.filePath(QStringLiteral("log")).toUtf8());
+    qputenv("STUB_STATE", stateDir.filePath(QStringLiteral("state")).toUtf8());
     qputenv("STUB_DENY", "permission");
 
     HarborTailnet tailnet;
-    tailnet.setPathOverride(stubDir.path());
+    tailnet.setPathOverride(tailnetStubDir());
     tailnet.ensureJoined();
     QCOMPARE(tailnet.status(), QStringLiteral("needs-admin"));
 
@@ -189,29 +139,20 @@ void HarborTailnetTest::permissionRefusalReportsNeedsAdmin()
 
 void HarborTailnetTest::failedJoinIsOneShot()
 {
-    QTemporaryDir stubDir;
-    QVERIFY(stubDir.isValid());
-    QFile stub(stubDir.filePath(QStringLiteral("tailscale")));
-    QVERIFY(stub.open(QIODevice::WriteOnly));
-    QVERIFY(stub.write(kStubScript) > 0);
-    stub.close();
-    QVERIFY(QFile::setPermissions(
-        stub.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                             | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                             | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                             | QFileDevice::ExeOther));
+    QTemporaryDir stateDir;
+    QVERIFY(stateDir.isValid());
 
-    qputenv("STUB_LOG", stubDir.filePath(QStringLiteral("log")).toUtf8());
-    qputenv("STUB_STATE", stubDir.filePath(QStringLiteral("state")).toUtf8());
+    qputenv("STUB_LOG", stateDir.filePath(QStringLiteral("log")).toUtf8());
+    qputenv("STUB_STATE", stateDir.filePath(QStringLiteral("state")).toUtf8());
     qputenv("STUB_DENY", "down");
 
     HarborTailnet tailnet;
-    tailnet.setPathOverride(stubDir.path());
+    tailnet.setPathOverride(tailnetStubDir());
     tailnet.ensureJoined();
     tailnet.ensureJoined();
     QCOMPARE(tailnet.status(), QStringLiteral("unavailable"));
     // Exactly one `up` attempt per process, never a retry loop.
-    QCOMPARE(readLog(stubDir.filePath(QStringLiteral("log")))
+    QCOMPARE(readLog(stateDir.filePath(QStringLiteral("log")))
                  .count(QStringLiteral("up argv:up")),
              1);
 

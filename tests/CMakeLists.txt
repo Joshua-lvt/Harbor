@@ -96,15 +96,29 @@ add_test(NAME harbor_updater_tests COMMAND harbor_updater_tests)
 set_tests_properties(harbor_updater_tests PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Tailnet auto-join adapter: exercised against a stub `tailscale` on PATH,
-# never a real daemon. The test-only key below is syntactically shaped but
-# invalid — production keys arrive exclusively via HARBOR_TAILSCALE_AUTHKEY.
+# Tailnet auto-join adapter: exercised against a stub `tailscale` binary,
+# never a real daemon. A shell script cannot stand in: production resolves
+# `tailscale.exe` on Windows, where POSIX scripts do not execute. So the
+# stub is a tiny dependency-free program built here as `tailscale` (Linux)
+# / `tailscale.exe` (Windows) with identical behavior on every platform.
+# The test-only key below is syntactically shaped but invalid — production
+# keys arrive exclusively via HARBOR_TAILSCALE_AUTHKEY.
+add_executable(harbor_tailscale_stub tailnet-stub/tailscale_stub.cpp)
+set_target_properties(harbor_tailscale_stub PROPERTIES
+    OUTPUT_NAME tailscale
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tailnet-stub"
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
 qt_add_executable(harbor_tailnet_tests HarborTailnetTest.cpp
     "${CMAKE_SOURCE_DIR}/native/HarborTailnet.cpp"
     "${CMAKE_SOURCE_DIR}/native/HarborTailnet.h"
 )
+add_dependencies(harbor_tailnet_tests harbor_tailscale_stub)
 target_include_directories(harbor_tailnet_tests PRIVATE "${CMAKE_SOURCE_DIR}/native")
-target_compile_definitions(harbor_tailnet_tests PRIVATE HARBOR_TAILSCALE_AUTHKEY="tskey-auth-test-only-0000")
+target_compile_definitions(harbor_tailnet_tests PRIVATE
+    HARBOR_TAILSCALE_AUTHKEY="tskey-auth-test-only-0000"
+    HARBOR_TAILSCALE_STUB_DIR="${CMAKE_CURRENT_BINARY_DIR}/tailnet-stub")
 target_link_libraries(harbor_tailnet_tests PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME harbor_tailnet_tests COMMAND harbor_tailnet_tests)
 set_tests_properties(harbor_tailnet_tests PROPERTIES
