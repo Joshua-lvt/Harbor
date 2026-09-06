@@ -235,6 +235,15 @@ jobs:
           # with the config file right there).
           dir: /home/runner/Qt
           cache: false # partial trees once poisoned the shared cache; always fetch fresh
+      - name: Verify Android kit completeness
+        run: |
+          KIT="$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
+          ls "$KIT/lib/cmake/Qt6Core/" | head -20
+          test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreConfig.cmake" \
+            || { echo "Qt6CoreConfig missing"; exit 1; }
+          test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreTargets.cmake" \
+            || { echo "Qt6CoreTargets missing"; exit 1; }
+          du -sh "$KIT"
       - name: Link Qt kits into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
