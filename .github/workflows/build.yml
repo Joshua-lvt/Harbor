@@ -57,7 +57,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION_DESKTOP }}
-          cache: true
+          cache: false # partial trees once poisoned the shared cache; always fetch fresh
           cache-key-prefix: install-qt-desktop
       - name: Pack the kit
         run: |
@@ -90,8 +90,13 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION_DESKTOP }}
-          cache: true
+          cache: false # partial trees once poisoned the shared cache; always fetch fresh
           cache-key-prefix: install-qt-linux
+      - name: Verify Qt kit completeness
+        run: |
+          test -x "$QT_ROOT_DIR/bin/moc" || { echo "incomplete Qt kit"; exit 1; }
+          test -x "$QT_ROOT_DIR/bin/qt-cmake" || { echo "incomplete Qt kit"; exit 1; }
+          du -sh "$QT_ROOT_DIR"
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Go
@@ -136,7 +141,7 @@ jobs:
         with:
           version: ${{ env.QT_VERSION_DESKTOP }}
           arch: win64_msvc2022_64
-          cache: true
+          cache: false # partial trees once poisoned the shared cache; always fetch fresh
       - name: MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
       - name: Rust (MSVC)
@@ -227,7 +232,7 @@ jobs:
           version: ${{ env.QT_VERSION_ANDROID }}
           target: android
           arch: android_arm64_v8a
-          cache: true
+          cache: false # partial trees once poisoned the shared cache; always fetch fresh
           cache-key-prefix: install-qt-android
       - name: Link Qt kits into the $HOME/Qt layout
         env:
