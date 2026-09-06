@@ -222,36 +222,33 @@ jobs:
         with:
           name: qt-desktop-kit
           path: ${{ runner.temp }}/qtdesktop
-      - name: Unpack desktop kit into the shared layout
-        run: |
-          mkdir -p "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
-          tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
-            -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
-          QT_HOST_ROOT="$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64"
-          test -x "$QT_HOST_ROOT/bin/qmake" || test -x "$QT_HOST_ROOT/bin/qmake6" || { echo "missing host qmake"; exit 1; }
-          test -x "$QT_HOST_ROOT/bin/moc" || test -x "$QT_HOST_ROOT/libexec/moc" || { echo "missing host moc"; exit 1; }
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION_ANDROID }}
           target: android
           arch: android_arm64_v8a
+          # Install straight into $HOME/Qt (no symlinks): Qt's CMake
+          # packages compare install prefixes textually, and a symlinked
+          # prefix reads as a *different* Qt, tripping the
+          # multiple-inclusion guard ("Failed to find component Core"
+          # with the config file right there).
+          dir: /home/runner/Qt
           cache: false # partial trees once poisoned the shared cache; always fetch fresh
-          cache-key-prefix: install-qt-android
       - name: Link Qt kits into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
         run: |
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
+          test -x "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
             || { echo "missing android kit"; exit 1; }
-          mkdir -p "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a" \
-            "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
-          # The desktop kit from the artifact lands beside it; the build
-          # script picks it up as QT_HOST automatically (same version).
+          # The desktop kit from the artifact lands directly beside it — no
+          # symlinks anywhere: Qt's CMake packages compare install prefixes
+          # textually, and a symlinked prefix reads as a *different* Qt,
+          # tripping the multiple-inclusion guard ("Failed to find component
+          # Core" with the config file right there).
           mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
-          ln -sfn "$RUNNER_WORKSPACE/Qt/$HARBOR_QT_HOST_VERSION/gcc_64" \
-            "$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
+          tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
+            -C "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
           QT_HOST_ROOT="$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
           test -x "$QT_HOST_ROOT/bin/qmake" || test -x "$QT_HOST_ROOT/bin/qmake6" \
             || { echo "missing host kit qmake link"; exit 1; }
