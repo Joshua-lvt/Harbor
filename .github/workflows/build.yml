@@ -19,6 +19,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 env:
   # Last Qt with flat aqtinstall metadata on every target (6.9+ moved to a
