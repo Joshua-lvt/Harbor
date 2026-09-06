@@ -94,8 +94,10 @@ jobs:
           cache-key-prefix: install-qt-linux
       - name: Verify Qt kit completeness
         run: |
-          test -x "$QT_ROOT_DIR/bin/moc" || { echo "incomplete Qt kit"; exit 1; }
-          test -x "$QT_ROOT_DIR/bin/qt-cmake" || { echo "incomplete Qt kit"; exit 1; }
+          (test -x "$QT_ROOT_DIR/libexec/moc" || test -x "$QT_ROOT_DIR/bin/moc") \
+            || { echo "incomplete Qt kit"; exit 1; }
+          (test -x "$QT_ROOT_DIR/bin/qmake" || test -x "$QT_ROOT_DIR/bin/qmake6") \
+            || { echo "incomplete Qt kit"; exit 1; }
           du -sh "$QT_ROOT_DIR"
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
@@ -225,7 +227,8 @@ jobs:
           mkdir -p "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
           tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
             -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}"
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/moc"
+          (test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/libexec/moc" || \
+            test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/moc")
       - name: Qt for Android (arm64)
         uses: jurplel/install-qt-action@v4
         with:
