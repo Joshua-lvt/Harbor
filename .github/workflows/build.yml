@@ -21,11 +21,11 @@ on:
   pull_request:
 
 env:
-  # Last Qt with flat aqtinstall metadata on every target (6.9+ moved to a
-  # nested repo layout aqt 3.3.0 cannot parse). This also pins CI to the LTS
-  # near our 6.5 floor while development rides newer local kits.
+  # Desktop kits ride the last fully-mirrored Qt (aqtinstall cannot parse
+  # the newer nested repo layout yet). The Android target stays on the
+  # local kit, which alone supports this repo's NDK 28 / API 35 toolchain.
   QT_VERSION_DESKTOP: "6.8.3"
-  QT_VERSION_ANDROID: "6.8.3"
+  QT_VERSION_ANDROID: "6.11.2"
 
 jobs:
   version-check:
@@ -233,7 +233,11 @@ jobs:
           target: android
           arch: android_arm64_v8a
           cache: false # partial trees once poisoned the shared cache; always fetch fresh
-          cache-key-prefix: install-qt-android
+      - name: Verify Android kit completeness
+        run: |
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/lib/cmake/Qt6Core/" | head -8
+          test -f "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/lib/cmake/Qt6Core/Qt6CoreConfig.cmake"
+          du -sh "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
       - name: Link Qt kits into the $HOME/Qt layout
         env:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
