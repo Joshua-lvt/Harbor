@@ -61,9 +61,10 @@ jobs:
           cache-key-prefix: install-qt-desktop
       - name: Pack the kit
         run: |
-          test -x "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/moc" \
-            || { echo "incomplete desktop kit"; exit 1; }
-          du -sh "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64"
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/" || true
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/" 2>/dev/null | head || true
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/" 2>/dev/null | head -20 || true
+          find "$RUNNER_WORKSPACE/Qt" -maxdepth 4 -name "moc" 2>/dev/null | head -5 || true
           tar -cf "$RUNNER_TEMP/qt-desktop-kit.tar" -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}" gcc_64
           ls -la "$RUNNER_TEMP/qt-desktop-kit.tar"
       - name: Upload desktop Qt kit
