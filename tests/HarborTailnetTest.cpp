@@ -51,6 +51,7 @@ private slots:
     void installScriptPicksNativePackageOnArch();
     void installScriptUsesVendorScriptOnDebianAndFedora();
     void installScriptRefusesUnknownDistros();
+    void defaultLocationsMatchPlatform();
 };
 
 void HarborTailnetTest::leavesConnectedClientAlone()
@@ -192,6 +193,20 @@ void HarborTailnetTest::installScriptRefusesUnknownDistros()
     QVERIFY(HarborTailnet::installScriptForOsRelease(
                 QStringLiteral("NAME=\"MysteryOS\"\nID=mystery\n"))
                 .isEmpty());
+}
+
+void HarborTailnetTest::defaultLocationsMatchPlatform()
+{
+#ifdef Q_OS_WIN
+    // Fresh MSI installs are not reliably on PATH: the standard roots must
+    // be probed so first launch still finds the client.
+    const QStringList locations = HarborTailnet::defaultClientLocations();
+    QVERIFY(!locations.isEmpty());
+    for (const QString &location : locations)
+        QVERIFY(location.endsWith(QStringLiteral("Tailscale")));
+#else
+    QVERIFY(HarborTailnet::defaultClientLocations().isEmpty());
+#endif
 }
 
 QTEST_MAIN(HarborTailnetTest)

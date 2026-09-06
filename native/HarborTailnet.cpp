@@ -123,6 +123,27 @@ void HarborTailnet::setPathOverride(const QString &directory)
     m_pathOverride = directory;
 }
 
+QStringList HarborTailnet::defaultClientLocations()
+{
+#ifdef Q_OS_WIN
+    // The MSI does not reliably extend PATH: probe the standard install
+    // roots explicitly so a fresh install is found on first launch.
+    QStringList locations;
+    const QString programFiles = QProcessEnvironment::systemEnvironment().value(
+        QStringLiteral("ProgramFiles"), QStringLiteral("C:\\Program Files"));
+    const QString programFilesX86 = QProcessEnvironment::systemEnvironment().value(
+        QStringLiteral("ProgramFiles(x86)"), QStringLiteral("C:\\Program Files (x86)"));
+    for (const QString &root : {programFiles, programFilesX86}) {
+        const QString candidate = QDir(root).filePath(QStringLiteral("Tailscale"));
+        if (!locations.contains(candidate))
+            locations.append(candidate);
+    }
+    return locations;
+#else
+    return {};
+#endif
+}
+
 QString HarborTailnet::installScriptForOsRelease(const QString &osRelease)
 {
     const QString id = osReleaseField(osRelease, QStringLiteral("ID"));
@@ -264,7 +285,22 @@ void HarborTailnet::ensureJoined()
                 return candidate;
             return QString();
         }
-        return QStandardPaths::findExecutable(QStringLiteral("tailscale"));
+        QString found = QStandardPaths::findExecutable(QStringLiteral("tailscale"));
+        if (!found.isEmpty())
+            return found;
+        // Not on PATH (fresh MSI install): probe the standard roots.
+        for (const QString &location : defaultClientLocations()) {
+            const QString candidate = QDir(location).filePath(
+#ifdef Q_OS_WIN
+                QStringLiteral("tailscale.exe")
+#else
+                QStringLiteral("tailscale")
+#endif
+            );
+            if (QFileInfo(candidate).isFile() && QFileInfo(candidate).isExecutable())
+                return candidate;
+        }
+        return QString();
     };
     QString program = resolveProgram();
     bool installAttempted = false;

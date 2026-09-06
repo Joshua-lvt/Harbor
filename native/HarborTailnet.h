@@ -25,6 +25,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 class HarborTailnet final : public QObject
 {
@@ -48,6 +49,11 @@ public:
 
     /// Test seam: directory prepended to PATH when locating `tailscale`.
     void setPathOverride(const QString &directory);
+
+    /// Default install locations searched after PATH (Windows only: the MSI
+    /// does not always extend PATH, so `%ProgramFiles%\Tailscale` must be
+    /// probed explicitly). Empty everywhere else. Public as a test seam.
+    static QStringList defaultClientLocations();
 
     /// Builds the one-time privileged setup script for this distro from an
     /// /etc/os-release content snapshot, or empty when unknown. Pure and

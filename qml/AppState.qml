@@ -295,10 +295,13 @@ QtObject {
     }
 
     function openPairing() {
-        // The real PairingView selects HarborFacade when the supervised core is
-        // ready; tests without it still use MockController through the view.
-        pairingVisible = true
-        onboardingVisible = false
+        // Single pairing surface: the onboarding screen owns the whole flow
+        // (shareable six-digit code plus peer entry) in production, so every
+        // entry point lands on the same screen with the same code.
+        // PairingView remains only for the deterministic mock provider
+        // (tests/previews); production never mounts it.
+        onboardingVisible = true
+        pairingVisible = false
     }
 
     property var notifications: [

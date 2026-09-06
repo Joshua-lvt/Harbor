@@ -21,7 +21,10 @@ HarborStateLayer {
     readonly property bool paired: AppState.paired
     property bool copyFeedbackVisible: false
 
-    pageState: !root.paired ? "empty" : (root.sharing ? "content" : "empty")
+    // Paired devices always see the page: per-card honest empty states plus
+    // the connect-phone card when nothing is shared yet. Only the unpaired
+    // gate hides the content.
+    pageState: !root.paired ? "empty" : "content"
     title: !root.paired ? I18n.t("mobile.empty.title") : I18n.t("mobile.unpaired.title")
     description: !root.paired ? I18n.t("mobile.empty.description") : I18n.t("mobile.unpaired.description")
     iconName: "phone"
@@ -101,6 +104,47 @@ HarborStateLayer {
             title: I18n.t("mobile.title")
             subtitle: I18n.t("mobile.subtitle", { name: root.peerName() })
             iconName: "phone"
+        }
+
+        // ---- Connect your phone -------------------------------------------
+        // Linking is guidance, not protocol: install Harbor on Android and
+        // pair it with the same six-digit code. A phone only ever works
+        // alongside a PC — phone-to-phone is refused by the core.
+        HarborSectionCard {
+            Layout.fillWidth: true
+            Layout.maximumWidth: Theme.maxPageWidth
+            visible: !root.sharing
+            title: I18n.t("mobile.connect.title")
+            iconName: "phone"
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: Theme.sp2
+
+                Text {
+                    text: I18n.t("mobile.connect.description")
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontBody
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+
+                HarborButton {
+                    text: I18n.t("mobile.connect.action")
+                    variant: "secondary"
+                    onClicked: AppState.openPairing()
+                }
+
+                Text {
+                    text: I18n.t("mobile.rulesNote")
+                    color: Theme.textFaint
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSmall
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+            }
         }
 
         // ---- Battery ------------------------------------------------------

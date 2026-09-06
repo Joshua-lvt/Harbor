@@ -221,6 +221,8 @@ ApplicationWindow {
             }
             MobileTabView {
                 theme: appTheme
+                isCompanion: shell.isCompanion
+                sessionValid: shell.sessionValid
                 batteryAvailable: shell.batteryAvailable
                 batteryPercent: shell.batteryPercent
                 batteryCharging: shell.batteryCharging
@@ -244,6 +246,7 @@ ApplicationWindow {
                 onSetSharePhoneNotifications: on => shell.setSharePhoneNotifications(on)
                 onOpenSystemSettings: page => shell.openSystemSettings(page)
                 onRequestOwnNotificationPermission: shell.requestOwnNotificationPermission()
+                onOpenPairing: shell.openPairing()
             }
             MobileSettingsView {
                 theme: appTheme

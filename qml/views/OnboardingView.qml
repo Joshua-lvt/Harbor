@@ -226,34 +226,51 @@ HarborOverlayView {
                     wrapMode: Text.Wrap
                 }
 
-                // Your Harbor ID ------------------------------------------------
+                // Your shareable pairing code (host flow) --------------------
+                // This six-digit code is the hero of the screen: it is the
+                // only thing the other person ever types. The Harbor ID
+                // below is device identity, never a pairing code.
                 HarborSectionCard {
                     Layout.fillWidth: true
-                    title: I18n.t("onboarding.single.yourId")
+                    title: I18n.t("onboarding.single.shareCode")
+
+                    Text {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: root.selfPairingCode.length > 0
+                               ? root.selfPairingCode
+                               : I18n.t("common.notAvailable")
+                        color: Theme.textPrimary
+                        font.family: Theme.fontFamilyMonospace
+                        font.pixelSize: Theme.fontDisplay
+                        font.weight: Font.Bold
+                        font.letterSpacing: 4
+                    }
 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Theme.sp2
 
-                        Text {
-                            Layout.fillWidth: true
-                            text: root.selfHarborId.length > 0
-                                   ? root.selfHarborId
-                                   : I18n.t("common.notAvailable")
-                            color: Theme.textPrimary
-                            font.family: Theme.fontFamilyMonospace
-                            font.pixelSize: Theme.fontBody
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideMiddle
-                        }
+                        Item { Layout.fillWidth: true }
 
                         HarborButton {
-                            id: copyIdButton
-                            objectName: "onboardingCopyIdButton"
                             variant: "secondary"
-                            text: I18n.t("common.actions.copy")
-                            onClicked: root.copySelfId()
+                            text: I18n.t("pairing.qr.copy")
+                            enabled: root.selfPairingCode.length > 0
+                            onClicked: root.copyPairingCode()
                         }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: I18n.t("onboarding.single.shareHint")
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                     }
                 }
 
@@ -297,28 +314,14 @@ HarborOverlayView {
                         onClicked: root.cancelWaiting()
                     }
 
-                    // Your shareable pairing code (host flow).
-                    RowLayout {
+                    Text {
                         Layout.fillWidth: true
-                        visible: root.selfPairingCode.length > 0
-                                && root.uiState !== "SUCCESS"
-                        spacing: Theme.sp2
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: I18n.t("onboarding.single.yourCode",
-                                         { code: root.selfPairingCode })
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSmall
-                            wrapMode: Text.Wrap
-                        }
-
-                        HarborButton {
-                            variant: "quiet"
-                            text: I18n.t("pairing.qr.copy")
-                            onClicked: root.copyPairingCode()
-                        }
+                        text: I18n.t("onboarding.single.codeHint")
+                        color: Theme.textMuted
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                     }
 
                     Text {
@@ -390,6 +393,36 @@ HarborOverlayView {
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.Wrap
+                    }
+                }
+
+                // Device identity (informational only: never a pairing code) -
+                HarborSectionCard {
+                    Layout.fillWidth: true
+                    title: I18n.t("onboarding.single.yourId")
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.selfHarborId.length > 0
+                                   ? root.selfHarborId
+                                   : I18n.t("common.notAvailable")
+                            color: Theme.textMuted
+                            font.family: Theme.fontFamilyMonospace
+                            font.pixelSize: Theme.fontSmall
+                            elide: Text.ElideMiddle
+                        }
+
+                        HarborButton {
+                            id: copyIdButton
+                            objectName: "onboardingCopyIdButton"
+                            variant: "quiet"
+                            text: I18n.t("common.actions.copy")
+                            onClicked: root.copySelfId()
+                        }
                     }
                 }
 

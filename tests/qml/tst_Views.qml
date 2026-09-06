@@ -440,8 +440,8 @@ TestCase {
             verify(chat !== null && !chat.visible, "no chat action without a partner")
             compare(view.presenceText(), "")
             pair.clicked()
-            verify(AppState.pairingVisible)
-            MockController.closePairing()
+            verify(AppState.onboardingVisible)
+            AppState.onboardingVisible = false
         } finally {
             wait(60)
             view.destroy()
@@ -810,14 +810,14 @@ TestCase {
             verify(callButton !== null, "call gate button should exist")
             verify(chatButton !== null, "chat gate button should exist")
 
-            verify(!AppState.pairingVisible)
+            verify(!AppState.onboardingVisible)
             callButton.clicked()
-            verify(AppState.pairingVisible)
-            MockController.closePairing()
-            verify(!AppState.pairingVisible)
+            verify(AppState.onboardingVisible)
+            AppState.onboardingVisible = false
+            verify(!AppState.onboardingVisible)
             chatButton.clicked()
-            verify(AppState.pairingVisible)
-            MockController.closePairing()
+            verify(AppState.onboardingVisible)
+            AppState.onboardingVisible = false
         } finally {
             wait(60)
             call.destroy()

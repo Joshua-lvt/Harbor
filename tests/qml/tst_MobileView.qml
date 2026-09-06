@@ -97,13 +97,14 @@ TestCase {
         }
     }
 
-    // Paired but silent: every card says what is missing, nothing invented.
+    // Paired but silent: the connect-phone card leads, and every other
+    // card says what is missing, nothing invented.
     function test_pairedWithoutSharingShowsHonestEmpty() {
         _pair()
         AppState.setPeerPhone(null)
         var view = _createView()
         try {
-            verify(_hasText(view, I18n.t("mobile.unpaired.title")))
+            verify(_hasText(view, I18n.t("mobile.connect.title")))
             verify(_hasText(view, I18n.t("mobile.location.off")))
             verify(_hasText(view, I18n.t("mobile.notifications.off")))
         } finally {

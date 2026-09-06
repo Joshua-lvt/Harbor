@@ -20,6 +20,10 @@ ScrollView {
     property string locationText: ""
     property string locationUpdatedText: ""
     property bool phoneNotificationsSharing: false
+    // Link state (bound by the shell): companion means this phone shares
+    // the identity with an authorized PC; standalone is phone-only.
+    property bool isCompanion: false
+    property bool sessionValid: false
     property string phoneActivityPermission: "unknown"
     property string locationPermission: "unknown"
     property string notificationPermission: "unknown"
@@ -32,6 +36,7 @@ ScrollView {
     signal setShareLocation(bool on)
     signal setSharePhoneActivity(bool on)
     signal setSharePhoneNotifications(bool on)
+    signal openPairing()
     signal openSystemSettings(string page)
     signal requestOwnNotificationPermission()
 
@@ -51,6 +56,35 @@ ScrollView {
     ColumnLayout {
         width: view.availableWidth
         spacing: 12
+
+        GroupBox {
+            title: view.isCompanion ? qsTr("🔗 Linked with your PC") : qsTr("🔗 Link with your PC")
+            Layout.fillWidth: true
+            ColumnLayout {
+                Label {
+                    text: view.isCompanion
+                        ? qsTr("This phone shares your identity with your PC. Calls, chat and sharing converge on both.")
+                        : qsTr("Pair this phone with your PC using the same 6-digit code to share one identity: calls and chat follow you.")
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                MobileButton {
+                    text: view.sessionValid ? qsTr("Repair pairing") : qsTr("Pair with PC")
+                    theme: view.theme
+                    primary: !view.isCompanion
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48
+                    onClicked: view.openPairing()
+                }
+                Label {
+                    text: qsTr("A phone only works alongside a PC: phone-to-phone is refused, everything with a PC on board works.")
+                    wrapMode: Text.WordWrap
+                    opacity: 0.7
+                    font.pixelSize: 13
+                    Layout.fillWidth: true
+                }
+            }
+        }
 
         GroupBox {
             title: qsTr("📱 My phone")
