@@ -1,5 +1,5 @@
-# Harbor CI: one product version (VERSION file) across desktop Linux,
-# desktop Windows and Android. Tags look like v2.1.0 and must match VERSION.
+# Harbor CI: one product version (VERSION.txt) across desktop Linux,
+# desktop Windows and Android. Tags look like v2.1.0 and must match VERSION.txt.
 
 name: build
 
@@ -25,22 +25,29 @@ jobs:
       - name: Single product version everywhere
         run: |
           set -euo pipefail
+
           VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
           test -n "$VERSION"
+
           grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt"' CMakeLists.txt
           grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.txt"' Harbor-Mobile/CMakeLists.txt
+
           MAJOR="${VERSION%%.*}"
           REST="${VERSION#*.}"
           MINOR="${REST%%.*}"
           PATCH="${REST##*.}"
+
           CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+
           grep -q "android:versionCode=\"$CODE\"" Harbor-Mobile/android/AndroidManifest.xml
           grep -q "android:versionName=\"$VERSION\"" Harbor-Mobile/android/AndroidManifest.xml
+
           echo "version $VERSION (code $CODE) is consistent"
 
   qt-desktop-kit:
     needs: version-check
     runs-on: ubuntu-24.04
+
     steps:
       - name: Qt
         uses: jurplel/install-qt-action@v4
@@ -55,7 +62,11 @@ jobs:
           ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/" 2>/dev/null | head || true
           ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/" 2>/dev/null | head -20 || true
           find "$RUNNER_WORKSPACE/Qt" -maxdepth 4 -name "moc" 2>/dev/null | head -5 || true
-          tar -cf "$RUNNER_TEMP/qt-desktop-kit.tar" -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}" gcc_64
+
+          tar -cf "$RUNNER_TEMP/qt-desktop-kit.tar" \
+            -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}" \
+            gcc_64
+
           ls -la "$RUNNER_TEMP/qt-desktop-kit.tar"
 
       - name: Upload desktop Qt kit
@@ -68,6 +79,7 @@ jobs:
   linux:
     needs: version-check
     runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
 
@@ -88,9 +100,17 @@ jobs:
 
       - name: Verify Qt kit completeness
         run: |
-          test -x "$QT_ROOT_DIR/bin/qt-cmake" || { echo "incomplete Qt kit (qt-cmake missing)"; exit 1; }
-          test -x "$QT_ROOT_DIR/bin/qmake" || test -x "$QT_ROOT_DIR/bin/qmake6" || { echo "incomplete Qt kit (qmake missing)"; exit 1; }
-          test -x "$QT_ROOT_DIR/bin/moc" || test -x "$QT_ROOT_DIR/libexec/moc" || { echo "incomplete Qt kit (moc missing)"; exit 1; }
+          test -x "$QT_ROOT_DIR/bin/qt-cmake" \
+            || { echo "incomplete Qt kit (qt-cmake missing)"; exit 1; }
+
+          test -x "$QT_ROOT_DIR/bin/qmake" \
+            || test -x "$QT_ROOT_DIR/bin/qmake6" \
+            || { echo "incomplete Qt kit (qmake missing)"; exit 1; }
+
+          test -x "$QT_ROOT_DIR/bin/moc" \
+            || test -x "$QT_ROOT_DIR/libexec/moc" \
+            || { echo "incomplete Qt kit (moc missing)"; exit 1; }
+
           du -sh "$QT_ROOT_DIR"
 
       - name: Rust
@@ -104,7 +124,10 @@ jobs:
 
       - name: Configure, build, test
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
           cmake --build build --parallel
           cmake --build build --target all_qmllint
           ctest --test-dir build --output-on-failure
@@ -114,13 +137,26 @@ jobs:
         run: |
           VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
           STAGE="dist/harbor-linux-x86_64"
+
           mkdir -p "$STAGE"
-          cp build/harbor build/cargo-target/release/harbor-core "$STAGE/" 2>/dev/null \
-            || cp build/harbor build/cargo-target/debug/harbor-core "$STAGE/"
+
+          cp build/harbor \
+             build/cargo-target/release/harbor-core \
+             "$STAGE/" 2>/dev/null \
+            || cp build/harbor \
+               build/cargo-target/debug/harbor-core \
+               "$STAGE/"
+
           cp build/media/harbor-media "$STAGE/"
+
           echo "$VERSION" > "$STAGE/version.txt"
-          tar -czf "harbor-linux-x86_64.tar.gz" -C dist harbor-linux-x86_64
-          sha256sum harbor-linux-x86_64.tar.gz | awk '{print $1}' > harbor-linux-x86_64.tar.gz.sha256
+
+          tar -czf "harbor-linux-x86_64.tar.gz" \
+            -C dist harbor-linux-x86_64
+
+          sha256sum harbor-linux-x86_64.tar.gz \
+            | awk '{print $1}' \
+            > harbor-linux-x86_64.tar.gz.sha256
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
@@ -134,6 +170,7 @@ jobs:
   windows:
     needs: version-check
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -167,6 +204,7 @@ jobs:
         shell: pwsh
         run: |
           $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
+
           $env:PATH = $env:PATH + ";$msys/mingw64/bin"
           $env:CC = "$msys/mingw64/bin/x86_64-w64-mingw32-gcc.exe"
           $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
@@ -174,20 +212,90 @@ jobs:
           $env:PKG_CONFIG_PATH = "$msys/mingw64/lib/pkgconfig"
           $env:CGO_CFLAGS = "-I$msys/mingw64/include"
           $env:CGO_LDFLAGS = "-L$msys/mingw64/lib -lopus"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
           cmake --build build --parallel
+
           ctest --test-dir build --output-on-failure
+
+      # Important:
+      # Do not assume the executables are in build/Release/.
+      # Ninja/CMake may place them directly under build/ or in another
+      # subdirectory depending on the target configuration.
+      - name: Debug Windows build output
+        shell: bash
+        run: |
+          echo "=== build directory ==="
+          find build -maxdepth 6 -type f \
+            \( -name "*.exe" -o -name "*.dll" \) \
+            -print | sort || true
+
+          echo
+          echo "=== repository executables ==="
+          find . -maxdepth 7 -type f \
+            -name "*.exe" \
+            -print | sort || true
 
       - name: Package release zip
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
+          set -euo pipefail
+
           VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
+
           mkdir -p dist/harbor-windows-x86_64
-          cp build/Release/harbor.exe build/Release/harbor-core.exe build/Release/harbor-media.exe dist/harbor-windows-x86_64/
+
+          echo "=== Locating Windows executables ==="
+
+          HARBOR_EXE="$(find build -type f -name 'harbor.exe' -print -quit)"
+          HARBOR_CORE_EXE="$(find build -type f -name 'harbor-core.exe' -print -quit)"
+          HARBOR_MEDIA_EXE="$(find build -type f -name 'harbor-media.exe' -print -quit)"
+
+          echo "harbor.exe:      ${HARBOR_EXE:-NOT FOUND}"
+          echo "harbor-core.exe: ${HARBOR_CORE_EXE:-NOT FOUND}"
+          echo "harbor-media.exe:${HARBOR_MEDIA_EXE:-NOT FOUND}"
+
+          if [ -z "$HARBOR_EXE" ]; then
+            echo "ERROR: harbor.exe was not found."
+            echo "Full build output:"
+            find build -maxdepth 7 -type f -print | sort || true
+            exit 1
+          fi
+
+          if [ -z "$HARBOR_CORE_EXE" ]; then
+            echo "ERROR: harbor-core.exe was not found."
+            echo "Full build output:"
+            find build -maxdepth 7 -type f -print | sort || true
+            exit 1
+          fi
+
+          if [ -z "$HARBOR_MEDIA_EXE" ]; then
+            echo "ERROR: harbor-media.exe was not found."
+            echo "Full build output:"
+            find build -maxdepth 7 -type f -print | sort || true
+            exit 1
+          fi
+
+          cp "$HARBOR_EXE" \
+             "$HARBOR_CORE_EXE" \
+             "$HARBOR_MEDIA_EXE" \
+             dist/harbor-windows-x86_64/
+
           echo "$VERSION" > dist/harbor-windows-x86_64/version.txt
+
+          echo
+          echo "=== Windows package contents ==="
+          find dist/harbor-windows-x86_64 -maxdepth 1 -type f -print | sort
+
           (cd dist && 7z a ../harbor-windows-x86_64.zip harbor-windows-x86_64)
-          sha256sum harbor-windows-x86_64.zip | awk '{print $1}' > harbor-windows-x86_64.zip.sha256
+
+          sha256sum harbor-windows-x86_64.zip \
+            | awk '{print $1}' \
+            > harbor-windows-x86_64.zip.sha256
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
@@ -201,6 +309,7 @@ jobs:
   android:
     needs: [version-check, qt-desktop-kit]
     runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
 
@@ -215,10 +324,16 @@ jobs:
 
       - name: Install platform, build-tools, NDK
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;28.2.13676358"
+
           mkdir -p ~/Android
           ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
-          "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+
+          "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" \
+            --version
 
       - name: Fetch the desktop host kit built by qt-desktop-kit
         uses: actions/download-artifact@v4
@@ -232,7 +347,13 @@ jobs:
           version: ${{ env.QT_VERSION_ANDROID }}
           target: android
           arch: android_arm64_v8a
+
+          # IMPORTANT:
+          # install-qt-action appends Qt/<version>/<arch> to dir.
+          # /home/runner therefore gives:
+          # /home/runner/Qt/6.8.3/android_arm64_v8a
           dir: /home/runner
+
           cache: false
 
       - name: Verify Android Qt layout
@@ -245,16 +366,28 @@ jobs:
           echo "KIT=$KIT"
 
           test "$QT_ROOT_DIR" = "$KIT" \
-            || { echo "Unexpected Qt root: $QT_ROOT_DIR"; exit 1; }
+            || {
+              echo "Unexpected Qt root: $QT_ROOT_DIR"
+              exit 1
+            }
 
           test -x "$KIT/bin/qt-cmake" \
-            || { echo "qt-cmake missing"; exit 1; }
+            || {
+              echo "qt-cmake missing"
+              exit 1
+            }
 
           test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreConfig.cmake" \
-            || { echo "Qt6CoreConfig missing"; exit 1; }
+            || {
+              echo "Qt6CoreConfig missing"
+              exit 1
+            }
 
           test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreTargets.cmake" \
-            || { echo "Qt6CoreTargets missing"; exit 1; }
+            || {
+              echo "Qt6CoreTargets missing"
+              exit 1
+            }
 
           du -sh "$KIT"
 
@@ -263,7 +396,10 @@ jobs:
           HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
         run: |
           test -x "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
-            || { echo "missing android kit"; exit 1; }
+            || {
+              echo "missing android kit"
+              exit 1
+            }
 
           mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
 
@@ -272,11 +408,19 @@ jobs:
 
           QT_HOST_ROOT="$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
 
-          test -x "$QT_HOST_ROOT/bin/qmake" || test -x "$QT_HOST_ROOT/bin/qmake6" \
-            || { echo "missing host kit qmake link"; exit 1; }
+          test -x "$QT_HOST_ROOT/bin/qmake" \
+            || test -x "$QT_HOST_ROOT/bin/qmake6" \
+            || {
+              echo "missing host kit qmake link"
+              exit 1
+            }
 
-          test -x "$QT_HOST_ROOT/bin/moc" || test -x "$QT_HOST_ROOT/libexec/moc" \
-            || { echo "missing host kit moc link"; exit 1; }
+          test -x "$QT_HOST_ROOT/bin/moc" \
+            || test -x "$QT_HOST_ROOT/libexec/moc" \
+            || {
+              echo "missing host kit moc link"
+              exit 1
+            }
 
           echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
 
@@ -300,8 +444,18 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           APK="$(find Harbor-Mobile/build-arm64 -path '*outputs/apk/debug/*.apk' | head -1)"
+
+          test -n "$APK" \
+            || {
+              echo "Android APK not found"
+              exit 1
+            }
+
           cp "$APK" harbor-android-arm64-debug.apk
-          sha256sum harbor-android-arm64-debug.apk | awk '{print $1}' > harbor-android-arm64-debug.apk.sha256
+
+          sha256sum harbor-android-arm64-debug.apk \
+            | awk '{print $1}' \
+            > harbor-android-arm64-debug.apk.sha256
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
@@ -316,6 +470,7 @@ jobs:
     needs: [linux, windows, android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
 
