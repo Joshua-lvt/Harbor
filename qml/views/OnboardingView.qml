@@ -1,0 +1,434 @@
+pragma ComponentBehavior: Bound
+
+import Harbor 2.0
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+// First-run pairing: a single, calm screen. No wizard, no server details.
+// The user sees their own Harbor ID, types the partner's Harbor ID, and
+// connects. The provider owns the handshake: the real HarborPairingBridge
+// while the supervised core is ready, MockController as the deterministic
+// provider for tests and previews.
+HarborOverlayView {
+    id: root
+
+    overlayActive: AppState.onboardingVisible
+    signal completed()
+    signal dismissed()
+
+    // qmllint disable unqualified
+    readonly property bool hasCore: typeof HarborCore !== "undefined"
+    readonly property bool liveCore: hasCore && HarborCore.coreReady
+    // qmllint enable unqualified
+
+    HarborPairingBridge {
+        id: realPairing
+
+        // qmllint disable unqualified
+        // Keep the facade attached whenever it exists (not only while the
+        // core is live) so the Harbor-ID copy still reaches the real
+        // clipboard during reconnects. Pairing actions still require `live`.
+        facade: root.hasCore ? HarborCore : null
+        // qmllint enable unqualified
+    }
+
+    // Same contract; production keeps its real provider through reconnects.
+    readonly property var provider: root.hasCore ? realPairing : MockController
+    readonly property bool pairingUnavailable: root.hasCore && !root.liveCore
+
+    property string peerHarborId: ""
+    property string noticeMessage: ""
+    property string noticeTone: "neutral" // neutral | danger | success
+
+    readonly property bool compact: width < 760
+
+    // Visual pairing state for this single screen, derived from the
+    // provider's mode plus transport failures. Human copy only — no
+    // technical state names reach the user.
+    readonly property string uiState: {
+        if (root.pairingUnavailable)
+            return "SERVER_UNAVAILABLE"
+        var mode = root.provider.pairingMode
+        if (mode === "success")
+            return "SUCCESS"
+        if (mode === "incoming")
+            return "INCOMING"
+        if (mode === "connecting")
+            return "WAITING_APPROVAL"
+        if (mode === "home")
+            return root.provider.harborIdFieldState === "invalid"
+                || String(root.peerHarborId || "").trim().length > 0 ? "ENTERING" : "INITIAL"
+        if (mode === "error") {
+            var key = String(root.provider.pairingErrorKey || "")
+            if (key.indexOf("declined") >= 0)
+                return "DECLINED"
+            if (key.indexOf("invalidHarborId") >= 0 || key.indexOf("notFound") >= 0)
+                return "INVALID_ID"
+            if (key.indexOf("server") >= 0 || key.indexOf("unavailable") >= 0)
+                return "SERVER_UNAVAILABLE"
+            return "ERROR"
+        }
+        return "INITIAL"
+    }
+
+    readonly property string selfHarborId: AppState.harborId
+    readonly property bool busy: root.uiState === "WAITING_APPROVAL"
+    readonly property var incoming: root.provider.incomingRequest
+
+    initialFocusItem: peerHarborInput
+    lastFocusItem: continueButton
+
+    Accessible.role: Accessible.Dialog
+    Accessible.name: I18n.t("onboarding.single.title")
+
+    function showNotice(message, tone) {
+        noticeMessage = message || ""
+        noticeTone = tone || "neutral"
+    }
+
+    function copySelfId() {
+        if (root.selfHarborId.length === 0)
+            return
+        root.provider.mockCopy(root.selfHarborId, "harborId")
+        showNotice(I18n.t("onboarding.single.copied"), "success")
+    }
+
+    function connectWithHarborId() {
+        showNotice("", "neutral")
+        var harborId = String(root.peerHarborId || "")
+        if (!root.provider.isValidHarborId(harborId)) {
+            showNotice(I18n.t("pairing.input.invalid"), "danger")
+            return false
+        }
+        return root.provider.connectWithHarborId(harborId)
+    }
+
+    function cancelWaiting() {
+        root.provider.cancelPairingRequest()
+        showNotice("", "neutral")
+    }
+
+    function continueWithoutPairing() {
+        root.provider.closePairing()
+        AppState.onboardingVisible = false
+        if (!AppState.paired)
+            AppState.continueWithoutPairing()
+        AppState.navigate("home")
+        dismissed()
+    }
+
+    function finish() {
+        AppState.onboardingVisible = false
+        AppState.navigate("home")
+        completed()
+    }
+
+    function skip() {
+        continueWithoutPairing()
+    }
+
+    Connections {
+        target: root.provider
+
+        function onPairingCompleted(partnerName) {
+            root.showNotice(I18n.t("pairing.success.paired", { name: partnerName }), "success")
+            // Let the success moment land before entering the space.
+            successTimer.restart()
+        }
+    }
+
+    Timer {
+        id: successTimer
+        interval: 900
+        repeat: false
+        onTriggered: root.finish()
+    }
+
+    onOverlayActiveChanged: {
+        if (overlayActive) {
+            peerHarborId = ""
+            root.provider.enteredHarborId = ""
+            showNotice("", "neutral")
+        } else {
+            successTimer.stop()
+        }
+    }
+
+    Rectangle {
+        id: dialog
+        width: Math.min(parent.width - (root.compact ? Theme.sp4 * 2 : Theme.sp6 * 2), 560)
+        height: Math.min(parent.height - (root.compact ? Theme.sp4 * 2 : Theme.sp5 * 2), 640)
+        anchors.centerIn: parent
+        radius: Theme.radiusLarge
+        color: Theme.surfaceOverlay
+        border.width: 1
+        border.color: Theme.borderStrong
+        clip: true
+
+        MouseArea { anchors.fill: parent; onClicked: mouse => mouse.accepted = true }
+
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+            contentWidth: availableWidth
+
+            ColumnLayout {
+                x: Theme.sp5
+                y: Theme.sp5
+                width: Math.max(0, parent.width - Theme.sp5 * 2)
+                spacing: Theme.sp4
+
+                HarborLogo {
+                    Layout.alignment: Qt.AlignHCenter
+                    showWordmark: true
+                    compact: false
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: I18n.t("onboarding.single.title")
+                    color: Theme.textPrimary
+                    font.family: Theme.fontFamilyDisplay
+                    font.pixelSize: Theme.fontDisplay
+                    font.weight: Font.Bold
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: I18n.t("onboarding.single.subtitle")
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontBody
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                }
+
+                // Your Harbor ID (hero): the only thing the other person
+                // ever types. Copying is exact — no spaces, no digits lost.
+                HarborSectionCard {
+                    Layout.fillWidth: true
+                    title: I18n.t("pairing.ownCard.title")
+
+                    Text {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: root.selfHarborId.length > 0
+                               ? root.selfHarborId
+                               : I18n.t("common.notAvailable")
+                        color: Theme.textPrimary
+                        font.family: Theme.fontFamilyMonospace
+                        font.pixelSize: Theme.fontDisplay
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0.5
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        Item { Layout.fillWidth: true }
+
+                        HarborButton {
+                            variant: "secondary"
+                            text: I18n.t("pairing.ownCard.copy")
+                            enabled: root.selfHarborId.length > 0
+                            onClicked: root.copySelfId()
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: I18n.t("pairing.ownCard.share")
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+                }
+
+                // Partner Harbor ID ------------------------------------------
+                HarborSectionCard {
+                    Layout.fillWidth: true
+                    title: I18n.t("pairing.input.title")
+
+                    HarborInput {
+                        id: peerHarborInput
+                        objectName: "onboardingPeerHarborInput"
+                        Layout.fillWidth: true
+                        placeholderText: I18n.t("pairing.input.placeholder")
+                        text: root.peerHarborId
+                        inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
+                        helperText: I18n.t("pairing.input.formatHint")
+                        errorText: root.uiState === "INVALID_ID"
+                                   ? I18n.t("pairing.input.invalid") : ""
+                        onTextEdited: value => {
+                            root.peerHarborId = String(value || "")
+                            root.provider.enteredHarborId = String(value || "")
+                            root.showNotice("", "neutral")
+                        }
+                        onAccepted: root.connectWithHarborId()
+                    }
+
+                    HarborButton {
+                        id: connectButton
+                        objectName: "onboardingConnectButton"
+                        Layout.fillWidth: true
+                        variant: "primary"
+                        text: root.uiState === "WAITING_APPROVAL"
+                               ? I18n.t("onboarding.single.waiting")
+                               : I18n.t("pairing.connect")
+                        busy: root.busy
+                        enabled: !root.busy && !root.pairingUnavailable
+                                 && root.provider.isValidHarborId(root.peerHarborId)
+                        onClicked: root.connectWithHarborId()
+                    }
+
+                    HarborButton {
+                        visible: root.uiState === "WAITING_APPROVAL"
+                        Layout.fillWidth: true
+                        variant: "secondary"
+                        text: I18n.t("pairing.connecting.cancel")
+                        onClicked: root.cancelWaiting()
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "WAITING_APPROVAL"
+                        text: I18n.t("onboarding.single.waitingDetail")
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.noticeMessage.length > 0
+                        text: root.noticeMessage
+                        color: root.noticeTone === "danger" ? Theme.danger
+                               : root.noticeTone === "success" ? Theme.success
+                               : Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "WAITING_APPROVAL"
+                        text: I18n.t("onboarding.single.waitingDetail")
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "DECLINED"
+                        text: I18n.t("pairing.error.declined")
+                        color: Theme.danger
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "INVALID_ID"
+                        text: root.provider.pairingErrorKey.length > 0
+                               ? I18n.t(root.provider.pairingErrorKey)
+                               : I18n.t("pairing.input.invalid")
+                        color: Theme.danger
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "SERVER_UNAVAILABLE"
+                        text: I18n.t("error.server.unavailable")
+                        color: Theme.danger
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: root.uiState === "SUCCESS"
+                        text: I18n.t("pairing.success.subtitle")
+                        color: Theme.success
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+                }
+
+                // Incoming request ------------------------------------------------
+                HarborSectionCard {
+                    Layout.fillWidth: true
+                    visible: root.uiState === "INCOMING"
+                    title: I18n.t("pairing.incoming.title")
+                    iconName: "phone"
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.incoming && String(root.incoming.harborId || root.incoming.name || "").length > 0
+                               ? I18n.t("pairing.incoming.description",
+                                        { name: String(root.incoming.harborId || root.incoming.name) })
+                               : I18n.t("pairing.incoming.unknown")
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontBody
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sp2
+
+                        HarborButton {
+                            Layout.fillWidth: true
+                            variant: "primary"
+                            text: I18n.t("pairing.incoming.accept")
+                            onClicked: root.provider.acceptIncomingRequest()
+                        }
+
+                        HarborButton {
+                            Layout.fillWidth: true
+                            variant: "secondary"
+                            text: I18n.t("pairing.incoming.decline")
+                            onClicked: root.provider.declineIncomingRequest()
+                        }
+                    }
+                }
+
+                HarborButton {
+                    id: continueButton
+                    objectName: "onboardingContinueButton"
+                    Layout.alignment: Qt.AlignHCenter
+                    variant: "quiet"
+                    text: I18n.t("onboarding.single.continueWithout")
+                    onClicked: root.continueWithoutPairing()
+                }
+            }
+        }
+    }
+}

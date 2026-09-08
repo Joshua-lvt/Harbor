@@ -1,0 +1,1017 @@
+# Harbor CI: one product version (VERSION.txt) across desktop Linux,
+# desktop Windows and Android. Tags look like v2.1.0 and must match VERSION.txt.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  QT_VERSION_DESKTOP: "6.8.3"
+  QT_VERSION_ANDROID: "6.8.3"
+
+jobs:
+  version-check:
+    needs: []
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Single product version everywhere
+        run: |
+          set -euo pipefail
+
+          VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
+          test -n "$VERSION"
+
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt"' CMakeLists.txt
+          grep -q 'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION.txt"' Harbor-Mobile/CMakeLists.txt
+
+          MAJOR="${VERSION%%.*}"
+          REST="${VERSION#*.}"
+          MINOR="${REST%%.*}"
+          PATCH="${REST##*.}"
+
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+
+          grep -q "android:versionCode=\"$CODE\"" Harbor-Mobile/android/AndroidManifest.xml
+          grep -q "android:versionName=\"$VERSION\"" Harbor-Mobile/android/AndroidManifest.xml
+
+          echo "version $VERSION (code $CODE) is consistent"
+
+  qt-desktop-kit:
+    needs: version-check
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_DESKTOP }}
+          cache: false
+          cache-key-prefix: install-qt-desktop
+
+      - name: Pack the kit
+        run: |
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/" || true
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/" 2>/dev/null | head || true
+          ls "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}/gcc_64/bin/" 2>/dev/null | head -20 || true
+          find "$RUNNER_WORKSPACE/Qt" -maxdepth 4 -name "moc" 2>/dev/null | head -5 || true
+
+          tar -cf "$RUNNER_TEMP/qt-desktop-kit.tar" \
+            -C "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION_DESKTOP }}" \
+            gcc_64
+
+          ls -la "$RUNNER_TEMP/qt-desktop-kit.tar"
+
+      - name: Upload desktop Qt kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-desktop-kit
+          path: ${{ runner.temp }}/qt-desktop-kit.tar
+          retention-days: 2
+
+  linux:
+    needs: version-check
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config patchelf \
+            libopus-dev libvpx-dev libfontconfig1 libfreetype6 libxkbcommon0 libdbus-1-3 \
+            libgl1 libegl1
+
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_DESKTOP }}
+          cache: false
+          cache-key-prefix: install-qt-linux
+
+      - name: Verify Qt kit completeness
+        run: |
+          test -x "$QT_ROOT_DIR/bin/qt-cmake" \
+            || { echo "incomplete Qt kit (qt-cmake missing)"; exit 1; }
+
+          test -x "$QT_ROOT_DIR/bin/qmake" \
+            || test -x "$QT_ROOT_DIR/bin/qmake6" \
+            || { echo "incomplete Qt kit (qmake missing)"; exit 1; }
+
+          test -x "$QT_ROOT_DIR/bin/moc" \
+            || test -x "$QT_ROOT_DIR/libexec/moc" \
+            || { echo "incomplete Qt kit (moc missing)"; exit 1; }
+
+          du -sh "$QT_ROOT_DIR"
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+
+      - name: Cross-build portable updater helper
+        run: |
+          cd updater
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/harbor-update-helper
+
+      - name: Configure, build, test
+        env:
+          # Oracle-default release builds: set the repo Variable
+          # HARBOR_ORACLE_ADDRESS to "<oracle-ipv4>:9091" (Settings →
+          # Variables — never committed). Empty/missing keeps the K11
+          # literal fallback, so PRs and forks keep building fine.
+          HARBOR_ORACLE_ADDRESS: ${{ vars.HARBOR_ORACLE_ADDRESS }}
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+          cmake --build build --parallel
+          cmake --build build --target all_qmllint
+          ctest --test-dir build --output-on-failure
+
+      - name: Package Linux AppImage and updater archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+
+          VERSION="$(tr -d ' \t\r\n' < VERSION.txt)"
+          APPDIR="$PWD/dist/Harbor.AppDir"
+          STAGE="dist/harbor-linux-x86_64"
+          TOOLS="$RUNNER_TEMP/harbor-linuxdeploy"
+
+          mkdir -p "$APPDIR/usr/bin" "$STAGE" "$TOOLS"
+
+          cp build/harbor \
+             build/cargo-target/release/harbor-core \
+             "$APPDIR/usr/bin/" 2>/dev/null \
+            || cp build/harbor \
+               build/cargo-target/debug/harbor-core \
+               "$APPDIR/usr/bin/"
+
+          cp build/media/harbor-media "$APPDIR/usr/bin/"
+          cp build/harbor-update-helper "$APPDIR/usr/bin/"
+          test -x "$APPDIR/usr/bin/harbor-update-helper"
+
+          # Use the deployer's recursive dependency scan rather than copying
+          # only direct ldd results. The latter omitted libqxcb dependencies
+          # and could make the bundled Qt fail on machines that had their own
+          # otherwise-working Qt installation.
+          curl -fL --retry 3 \
+            -o "$TOOLS/linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          curl -fL --retry 3 \
+            -o "$TOOLS/linuxdeploy-plugin-qt" \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-qt-x86_64.AppImage
+
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $TOOLS/linuxdeploy" \
+            | sha256sum -c -
+          echo "15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724  $TOOLS/linuxdeploy-plugin-qt" \
+            | sha256sum -c -
+          chmod +x "$TOOLS/linuxdeploy" "$TOOLS/linuxdeploy-plugin-qt"
+
+          export PATH="$TOOLS:$PATH"
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          export QML_SOURCES_PATHS="$PWD/qml"
+          export EXTRA_PLATFORM_PLUGINS="libqoffscreen.so"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export OUTPUT="$PWD/harbor-linux-x86_64.AppImage"
+
+          linuxdeploy \
+            --appdir "$APPDIR" \
+            --executable "$APPDIR/usr/bin/harbor" \
+            --executable "$APPDIR/usr/bin/harbor-core" \
+            --executable "$APPDIR/usr/bin/harbor-media" \
+            --executable "$APPDIR/usr/bin/harbor-update-helper" \
+            --desktop-file packaging/harbor.desktop \
+            --icon-file packaging/icons/hicolor/256x256/apps/harbor.png \
+            --plugin qt \
+            --output appimage
+
+          test -x harbor-linux-x86_64.AppImage
+          test -f "$APPDIR/usr/plugins/platforms/libqxcb.so"
+          test -f "$APPDIR/usr/qml/QtQuick/Controls/qmldir"
+
+          if ldd "$APPDIR/usr/plugins/platforms/libqxcb.so" | grep -q "not found"; then
+            ldd "$APPDIR/usr/plugins/platforms/libqxcb.so"
+            echo "xcb platform plugin has unresolved dependencies"
+            exit 1
+          fi
+
+          # A real startup smoke catches Qt/plugin/QML deployment failures.
+          set +e
+          QT_QPA_PLATFORM=offscreen timeout 10s ./harbor-linux-x86_64.AppImage \
+            > "$RUNNER_TEMP/harbor-appimage-smoke.log" 2>&1
+          smoke_status=$?
+          set -e
+          if [ "$smoke_status" -ne 124 ]; then
+            cat "$RUNNER_TEMP/harbor-appimage-smoke.log"
+            echo "AppImage exited during startup (status $smoke_status)"
+            exit 1
+          fi
+
+          sha256sum harbor-linux-x86_64.AppImage \
+            | awk '{print $1}' \
+            > harbor-linux-x86_64.AppImage.sha256
+
+          # Keep the tree archive expected by the current updater. It uses the
+          # exact deployed AppDir, with symlinks dereferenced because updater
+          # extraction intentionally rejects archive symlink entries.
+          cp -a "$APPDIR/usr" "$STAGE/"
+          install -m 0755 packaging/linux/harbor-launcher "$STAGE/harbor"
+          echo "$VERSION" > "$STAGE/version.txt"
+
+          set +e
+          QT_QPA_PLATFORM=offscreen timeout 10s "$STAGE/harbor" \
+            > "$RUNNER_TEMP/harbor-tree-smoke.log" 2>&1
+          smoke_status=$?
+          set -e
+          if [ "$smoke_status" -ne 124 ]; then
+            cat "$RUNNER_TEMP/harbor-tree-smoke.log"
+            echo "deployed tree exited during startup (status $smoke_status)"
+            exit 1
+          fi
+
+          tar --create --gzip --dereference --hard-dereference \
+            --file "harbor-linux-x86_64.tar.gz" \
+            -C dist harbor-linux-x86_64
+
+          if tar -tvzf harbor-linux-x86_64.tar.gz | grep -Eq '^[lh]'; then
+            echo "updater archive contains links"
+            exit 1
+          fi
+
+          sha256sum harbor-linux-x86_64.tar.gz \
+            | awk '{print $1}' \
+            > harbor-linux-x86_64.tar.gz.sha256
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: |
+            harbor-linux-x86_64.AppImage
+            harbor-linux-x86_64.AppImage.sha256
+            harbor-linux-x86_64.tar.gz
+            harbor-linux-x86_64.tar.gz.sha256
+
+  windows:
+    needs: version-check
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Qt (MSVC 2022 64-bit)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_DESKTOP }}
+          arch: win64_msvc2022_64
+          cache: false
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+
+      - name: MinGW + Opus for the media worker CGO build
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config mingw-w64-x86_64-opus
+
+      - name: Configure, build, test
+        shell: pwsh
+        env:
+          # Same Oracle-default contract as Linux (repo Variable, empty-safe).
+          HARBOR_ORACLE_ADDRESS: ${{ vars.HARBOR_ORACLE_ADDRESS }}
+          HARBOR_UPDATE_PUBLIC_KEYS: ${{ vars.HARBOR_UPDATE_PUBLIC_KEYS }}
+        run: |
+          if ($env:GITHUB_REF.StartsWith("refs/tags/v") -and [string]::IsNullOrWhiteSpace($env:HARBOR_UPDATE_PUBLIC_KEYS)) {
+            throw "HARBOR_UPDATE_PUBLIC_KEYS repository variable is required for releases"
+          }
+          $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
+
+          $env:PATH = $env:PATH + ";$msys/mingw64/bin"
+          $env:CC = "$msys/mingw64/bin/x86_64-w64-mingw32-gcc.exe"
+          $env:CC_x86_64_pc_windows_msvc = 'cl.exe'
+          $env:PKG_CONFIG = "$msys/mingw64/bin/pkg-config.exe"
+          $env:PKG_CONFIG_PATH = "$msys/mingw64/lib/pkgconfig"
+          $env:CGO_CFLAGS = "-I$msys/mingw64/include"
+          $env:CGO_LDFLAGS = "-L$msys/mingw64/lib -lopus"
+
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DHARBOR_UPDATE_PUBLIC_KEYS=$env:HARBOR_UPDATE_PUBLIC_KEYS" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+           cmake --build build --parallel
+
+           Push-Location updater
+           go test ./...
+           Pop-Location
+
+           ctest --test-dir build --output-on-failure
+
+      - name: Debug Windows build output
+        shell: bash
+        run: |
+          echo "=== build directory ==="
+
+          find build -maxdepth 6 -type f \
+            \( -name "*.exe" -o -name "*.dll" \) \
+            -print | sort || true
+
+          echo
+          echo "=== repository executables ==="
+
+          find . -maxdepth 7 -type f \
+            -name "*.exe" \
+            -print | sort || true
+
+      - name: Install NSIS (installer compiler)
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Fetch Windows installer dependencies (pinned, hash-verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $deps = Join-Path $PWD "dist\win-deps"
+
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+
+          $vcUrl = (Get-Content packaging/windows/VCREDIST_URL -Raw).Trim()
+          $vcHash = (Get-Content packaging/windows/VCREDIST_SHA256 -Raw).Trim()
+
+          $vc = Join-Path $deps "vc_redist.x64.exe"
+
+          Write-Host "Downloading VC++ 2022 redistributable ..."
+          Invoke-WebRequest -Uri $vcUrl -OutFile $vc
+
+          $gotVc = (Get-FileHash $vc -Algorithm SHA256).Hash.ToLower()
+
+          if ($gotVc -ne $vcHash) {
+            throw "VC++ redist hash mismatch: got $gotVc, want $vcHash. Microsoft rotated the evergreen binary: download it, verify the publisher signature, and update packaging/windows/VCREDIST_SHA256."
+          }
+
+          Write-Host "OK: vc_redist.x64.exe"
+
+      # Ungated on purpose: every run stages, deploys Qt and validates the
+      # package contents, so the NSIS installer below compile-checks on PRs
+      # too. Only the artifact upload stays tag-gated.
+      - name: Package Windows release with Qt dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "VERSION.txt is empty."
+          }
+
+          $stage = Join-Path $PWD "dist\harbor-windows-x86_64"
+
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Locating Harbor executables"
+          Write-Host "========================================"
+
+          $harborExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborCoreExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-core.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborMediaExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-media.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborHelperExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-update-helper.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          $harborBrokerExe = Get-ChildItem `
+            -Path "build" `
+            -Filter "harbor-update-broker.exe" `
+            -File `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $harborExe) {
+            Write-Host "ERROR: harbor.exe was not found."
+            Write-Host ""
+            Write-Host "Available executables:"
+            Get-ChildItem build -Recurse -File |
+              Where-Object { $_.Extension -eq ".exe" } |
+              Select-Object FullName
+
+            exit 1
+          }
+
+          if (-not $harborCoreExe) {
+            Write-Host "ERROR: harbor-core.exe was not found."
+            exit 1
+          }
+
+          if (-not $harborMediaExe) {
+            Write-Host "ERROR: harbor-media.exe was not found."
+            exit 1
+          }
+          if (-not $harborHelperExe) {
+            Write-Host "ERROR: harbor-update-helper.exe was not found."
+            exit 1
+          }
+          if (-not $harborBrokerExe) {
+            Write-Host "ERROR: harbor-update-broker.exe was not found."
+            exit 1
+          }
+
+          Write-Host "harbor.exe:"
+          Write-Host "  $($harborExe.FullName)"
+
+          Write-Host "harbor-core.exe:"
+          Write-Host "  $($harborCoreExe.FullName)"
+
+          Write-Host "harbor-media.exe:"
+          Write-Host "  $($harborMediaExe.FullName)"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Copying Harbor executables"
+          Write-Host "========================================"
+
+          Copy-Item `
+            $harborExe.FullName `
+            (Join-Path $stage "harbor.exe") `
+            -Force
+
+          Copy-Item `
+            $harborCoreExe.FullName `
+            (Join-Path $stage "harbor-core.exe") `
+            -Force
+
+          Copy-Item `
+            $harborMediaExe.FullName `
+            (Join-Path $stage "harbor-media.exe") `
+            -Force
+
+          Copy-Item `
+            $harborHelperExe.FullName `
+            (Join-Path $stage "harbor-update-helper.exe") `
+            -Force
+
+          if (-not (Test-Path (Join-Path $stage "harbor-update-helper.exe"))) {
+            throw "helper missing from flat Windows package stage"
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Media worker native dependencies"
+          Write-Host "========================================"
+
+          # harbor-media.exe links Opus dynamically (CGO): the DLL must ship
+          # beside it or Windows refuses to start it ("libopus-0.dll não foi
+          # encontrado"). It comes from the same MSYS2 package the media
+          # worker compiles against, so no download or version guesswork.
+          $msys = '${{ steps.msys2.outputs.msys2-location }}' -replace '\\','/'
+          $opusDll = "$msys/mingw64/bin/libopus-0.dll"
+
+          if (-not (Test-Path $opusDll)) {
+            throw "libopus-0.dll was not found at $opusDll"
+          }
+
+          Copy-Item `
+            $opusDll `
+            (Join-Path $stage "libopus-0.dll") `
+            -Force
+
+          Write-Host "OK: libopus-0.dll"
+
+          Set-Content `
+            -Path (Join-Path $stage "version.txt") `
+            -Value $version `
+            -NoNewline
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt deployment"
+          Write-Host "========================================"
+
+          $windeployqt = Join-Path `
+            $env:QT_ROOT_DIR `
+            "bin\windeployqt.exe"
+
+          Write-Host "QT_ROOT_DIR:"
+          Write-Host "  $env:QT_ROOT_DIR"
+
+          Write-Host "windeployqt:"
+          Write-Host "  $windeployqt"
+
+          if (-not (Test-Path $windeployqt)) {
+            Write-Host ""
+            Write-Host "ERROR: windeployqt.exe was not found."
+
+            Write-Host ""
+            Write-Host "Qt bin directory:"
+            Get-ChildItem `
+              (Join-Path $env:QT_ROOT_DIR "bin") `
+              -File |
+              Select-Object Name
+
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "Running windeployqt..."
+
+          & $windeployqt `
+            --release `
+            --compiler-runtime `
+            --qmldir "$PWD\qml" `
+            --dir "$stage" `
+            "$stage\harbor.exe"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: windeployqt failed."
+            Write-Host "Exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+          Write-Host ""
+          Write-Host "windeployqt completed successfully."
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Validating Qt deployment"
+          Write-Host "========================================"
+
+          $requiredQtDlls = @(
+            "Qt6Core.dll",
+            "Qt6Gui.dll",
+            "Qt6Widgets.dll",
+            "Qt6Network.dll",
+            "Qt6Qml.dll",
+            "Qt6Quick.dll"
+          )
+
+          foreach ($dll in $requiredQtDlls) {
+            $dllPath = Join-Path $stage $dll
+
+            if (-not (Test-Path $dllPath)) {
+              throw "Required Qt DLL was not deployed: $dll"
+            }
+
+            Write-Host "OK: $dll"
+          }
+
+          $platformPlugin = Join-Path `
+            $stage `
+            "platforms\qwindows.dll"
+
+          if (-not (Test-Path $platformPlugin)) {
+            throw "Qt Windows platform plugin was not deployed: platforms/qwindows.dll"
+          }
+
+          Write-Host "OK: platforms/qwindows.dll"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt DLLs"
+          Write-Host "========================================"
+
+          Get-ChildItem `
+            $stage `
+            -Filter "Qt6*.dll" |
+            Sort-Object Name |
+            Select-Object Name, Length
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Qt platform plugins"
+          Write-Host "========================================"
+
+          if (Test-Path "$stage\platforms") {
+            Get-ChildItem `
+              "$stage\platforms" `
+              -File |
+              Sort-Object Name |
+              Select-Object Name, Length
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "QML deployment"
+          Write-Host "========================================"
+
+          $qmlDirectories = @(
+            "QtQml",
+            "QtQuick"
+          )
+
+          foreach ($qmlDir in $qmlDirectories) {
+            $qmlPath = Join-Path $stage $qmlDir
+
+            if (Test-Path $qmlPath) {
+              Write-Host "OK: $qmlDir"
+            }
+            else {
+              Write-Host "INFO: $qmlDir was not created by windeployqt"
+            }
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Final Windows package contents"
+          Write-Host "========================================"
+
+          Get-ChildItem `
+            $stage `
+            -Recurse `
+            -File |
+            Sort-Object FullName |
+            Select-Object FullName, Length
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Creating ZIP"
+          Write-Host "========================================"
+
+          $zip = Join-Path `
+            $PWD `
+            "harbor-windows-x86_64.zip"
+
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+
+          & 7z a `
+            -tzip `
+            $zip `
+            "$stage\*"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: 7z failed."
+            Write-Host "Exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "Generating SHA256"
+          Write-Host "========================================"
+
+          $hash = (
+            Get-FileHash `
+              $zip `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          Set-Content `
+            -Path "harbor-windows-x86_64.zip.sha256" `
+            -Value $hash
+
+          Write-Host ""
+          Write-Host "Windows package created successfully:"
+          Write-Host "  $zip"
+
+          Write-Host ""
+          Write-Host "SHA256:"
+          Write-Host "  $hash"
+
+      - name: Build Windows installer (NSIS)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          $stage = Join-Path $PWD "dist\harbor-windows-x86_64"
+          $deps = Join-Path $PWD "dist\win-deps"
+          $exe = Join-Path $PWD "harbor-windows-setup.exe"
+          $broker = Join-Path $PWD "build\harbor-update-broker.exe"
+
+          if (-not (Test-Path $stage)) {
+            throw "Stage directory not found: $stage"
+          }
+          if (-not (Test-Path $broker)) {
+            throw "Protected update broker not found: $broker"
+          }
+
+          $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
+
+          if (-not (Test-Path $makensis)) {
+            throw "makensis.exe was not found at $makensis"
+          }
+
+          Write-Host "Building Harbor $version installer..."
+
+          & $makensis `
+            "/DVERSION=$version" `
+            "/DSTAGEDIR=$stage" `
+            "/DDEPSDIR=$deps" `
+            "/DBROKER=$broker" `
+            "/DOUTFILE=$exe" `
+            "$PWD\packaging\windows\harbor.nsi"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Installer built: $exe"
+
+      - name: Checksum the Windows installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $hash = (
+            Get-FileHash `
+              "harbor-windows-setup.exe" `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          Set-Content `
+            -Path "harbor-windows-setup.exe.sha256" `
+            -Value $hash
+
+          Write-Host "Installer SHA256:"
+          Write-Host "  $hash"
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: |
+            harbor-windows-x86_64.zip
+            harbor-windows-x86_64.zip.sha256
+            harbor-windows-setup.exe
+            harbor-windows-setup.exe.sha256
+
+  android:
+    needs: [version-check, qt-desktop-kit]
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK + NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform, build-tools, NDK
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;28.2.13676358"
+
+          mkdir -p ~/Android
+          ln -sfn "$ANDROID_SDK_ROOT" ~/Android/Sdk
+
+          "$ANDROID_SDK_ROOT/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" \
+            --version
+
+      - name: Fetch the desktop host kit built by qt-desktop-kit
+        uses: actions/download-artifact@v4
+        with:
+          name: qt-desktop-kit
+          path: ${{ runner.temp }}/qtdesktop
+
+      - name: Qt for Android (arm64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION_ANDROID }}
+          target: android
+          arch: android_arm64_v8a
+
+          # IMPORTANT:
+          # install-qt-action appends Qt/<version>/<arch> to dir.
+          # /home/runner therefore gives:
+          # /home/runner/Qt/6.8.3/android_arm64_v8a
+          dir: /home/runner
+
+          cache: false
+
+      - name: Verify Android Qt layout
+        run: |
+          set -euo pipefail
+
+          KIT="$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a"
+
+          echo "QT_ROOT_DIR=$QT_ROOT_DIR"
+          echo "KIT=$KIT"
+
+          test "$QT_ROOT_DIR" = "$KIT" \
+            || {
+              echo "Unexpected Qt root: $QT_ROOT_DIR"
+              exit 1
+            }
+
+          test -x "$KIT/bin/qt-cmake" \
+            || {
+              echo "qt-cmake missing"
+              exit 1
+            }
+
+          test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreConfig.cmake" \
+            || {
+              echo "Qt6CoreConfig missing"
+              exit 1
+            }
+
+          test -f "$KIT/lib/cmake/Qt6Core/Qt6CoreTargets.cmake" \
+            || {
+              echo "Qt6CoreTargets missing"
+              exit 1
+            }
+
+          du -sh "$KIT"
+
+      - name: Link Qt kits into the $HOME/Qt layout
+        env:
+          HARBOR_QT_HOST_VERSION: ${{ env.QT_VERSION_DESKTOP }}
+        run: |
+          test -x "$HOME/Qt/${{ env.QT_VERSION_ANDROID }}/android_arm64_v8a/bin/qt-cmake" \
+            || {
+              echo "missing android kit"
+              exit 1
+            }
+
+          mkdir -p "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
+
+          tar -xf "${{ runner.temp }}/qtdesktop/qt-desktop-kit.tar" \
+            -C "$HOME/Qt/$HARBOR_QT_HOST_VERSION"
+
+          QT_HOST_ROOT="$HOME/Qt/$HARBOR_QT_HOST_VERSION/gcc_64"
+
+          test -x "$QT_HOST_ROOT/bin/qmake" \
+            || test -x "$QT_HOST_ROOT/bin/qmake6" \
+            || {
+              echo "missing host kit qmake link"
+              exit 1
+            }
+
+          test -x "$QT_HOST_ROOT/bin/moc" \
+            || test -x "$QT_HOST_ROOT/libexec/moc" \
+            || {
+              echo "missing host kit moc link"
+              exit 1
+            }
+
+          echo "HARBOR_QT_HOST_VERSION=$HARBOR_QT_HOST_VERSION" >> "$GITHUB_ENV"
+
+      - name: Rust with Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: media/go.sum
+
+      - name: Build debug APK
+        env:
+          HARBOR_QT_VERSION: ${{ env.QT_VERSION_ANDROID }}
+          # Same Oracle-default contract as desktop (repo Variable,
+          # empty-safe); build-android.sh flows it into CMake configure.
+          HARBOR_ORACLE_ADDRESS: ${{ vars.HARBOR_ORACLE_ADDRESS }}
+        run: ./Harbor-Mobile/build-android.sh arm64
+
+      - name: Rename + checksum
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          APK="$(find Harbor-Mobile/build-arm64 -path '*outputs/apk/debug/*.apk' | head -1)"
+
+          test -n "$APK" \
+            || {
+              echo "Android APK not found"
+              exit 1
+            }
+
+          cp "$APK" harbor-android-arm64-debug.apk
+
+          sha256sum harbor-android-arm64-debug.apk \
+            | awk '{print $1}' \
+            > harbor-android-arm64-debug.apk.sha256
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-package
+          path: |
+            harbor-android-arm64-debug.apk
+            harbor-android-arm64-debug.apk.sha256
+
+  release:
+    needs: [linux, windows, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Sign Windows update manifest
+        working-directory: updater
+        env:
+          HARBOR_UPDATE_SIGNING_KEY: ${{ secrets.HARBOR_UPDATE_SIGNING_KEY }}
+          HARBOR_UPDATE_PUBLIC_KEYS: ${{ vars.HARBOR_UPDATE_PUBLIC_KEYS }}
+          HARBOR_UPDATE_KEY_ID: ${{ vars.HARBOR_UPDATE_KEY_ID }}
+        run: |
+          test -n "$HARBOR_UPDATE_SIGNING_KEY"
+          test -n "$HARBOR_UPDATE_PUBLIC_KEYS"
+          test -n "$HARBOR_UPDATE_KEY_ID"
+          version="${GITHUB_REF_NAME#v}"
+          go run ./cmd/harbor-update-manifest \
+            -package ../harbor-windows-x86_64.zip \
+            -version "$version" \
+            -platform windows \
+            -key-id "$HARBOR_UPDATE_KEY_ID" \
+            -output ../harbor-windows-x86_64.zip.update.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            harbor-linux-x86_64.AppImage
+            harbor-linux-x86_64.AppImage.sha256
+            harbor-linux-x86_64.tar.gz
+            harbor-linux-x86_64.tar.gz.sha256
+            harbor-windows-x86_64.zip
+            harbor-windows-x86_64.zip.sha256
+            harbor-windows-x86_64.zip.update.json
+            harbor-windows-setup.exe
+            harbor-windows-setup.exe.sha256
+            harbor-android-arm64-debug.apk
+            harbor-android-arm64-debug.apk.sha256
+          generate_release_notes: true
+          body: |
+            Harbor ${{ github.ref_name }} — updates install themselves on every version (mandatory once discovered; offline never bricks the app).
+
+            - **PC Linux AppImage** (`harbor-linux-x86_64.AppImage`, recommended): ready for daily use, self-contained, with an isolated Qt/QML/audio runtime.
+            - **PC Linux updater archive** (`harbor-linux-x86_64.tar.gz`): same deployed runtime in the tree format used by Harbor's built-in updater.
+            - **PC Windows installer** (`harbor-windows-setup.exe`, recommended): bundles the VC++ 2022 runtime; Harbor connects over your own internet — direct IPv6/IPv4 first, relay fallback — with no extra software.
+            - **PC Windows portable** (`harbor-windows-x86_64.zip`): no install, nothing else needed alongside.
+            - **Android** (`harbor-android-arm64-debug.apk`): 🚧 still testing — debug-signed, public-endpoint path, emulator-proven.

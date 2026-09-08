@@ -1,0 +1,27 @@
+[package]
+name = "harbor-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+harbor-control = { path = "../../control" }
+harbor-protocol = { path = "../../protocol" }
+crc32fast.workspace = true
+hmac.workspace = true
+md5.workspace = true
+sha1.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true

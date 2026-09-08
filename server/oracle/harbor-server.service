@@ -1,0 +1,39 @@
+# Harbor Server — Oracle systemd unit (proposal from oracle-migration.md,
+# nothing here is deployed by merging). Staging starts on loopback with a
+# disposable state dir (see install.sh --staging); production uses
+# /var/lib/harbor-server + /etc/harbor-server/harbor-server.env.
+[Unit]
+Description=Harbor control-plane server (TLS + STUN/TURN/relay on 9091)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=harbor-server
+Group=harbor-server
+StateDirectory=harbor-server
+StateDirectoryMode=0700
+EnvironmentFile=-/etc/harbor-server/harbor-server.env
+ExecStart=/usr/local/bin/harbor-server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+MemoryHigh=160M
+MemoryMax=192M
+TasksMax=64
+LimitNOFILE=4096
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/harbor-server
+
+[Install]
+WantedBy=multi-user.target

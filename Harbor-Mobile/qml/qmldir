@@ -1,0 +1,3 @@
+module HarborMobile
+singleton HarborVisualEffects 1.0 HarborVisualEffects.qml
+MobileShell 1.0 MobileShell.qml

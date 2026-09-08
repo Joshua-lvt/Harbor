@@ -1,0 +1,6 @@
+// Harbor Windows application icon.
+//
+// Embedded into harbor.exe by CMakeLists.txt (WIN32 builds only) so the exe
+// file, the taskbar button, and Alt+Tab carry the Harbor mark. Linux keeps
+// using the installed hicolor theme instead (packaging/icons/hicolor).
+IDI_ICON1 ICON "icons/harbor.ico"
