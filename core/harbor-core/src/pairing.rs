@@ -52,14 +52,46 @@ pub fn oracle_endpoint() -> Option<String> {
     None
 }
 
-/// Every endpoint `migrate_server_pin` may move: the legacy K11 literals
-/// plus the configured Oracle endpoint. The Oracle address is a source
-/// (never a compiled default) so both hops — K11 → Oracle IP, then Oracle
-/// IP → a later address if the endpoint ever changes — migrate with the same
-/// idempotent mechanism. Anything else is a custom endpoint and is preserved
-/// untouched (E3).
+/// A Tailscale address is never a product endpoint: the product is
+/// Oracle-only. Tailscale uses the CGNAT range 100.64.0.0/10, so any IPv4
+/// `100.64.0.0`–`100.127.255.255` host (with any port) counts, whether or
+/// not a Tailscale client is even installed here.
+pub fn is_tailscale_address(address: &str) -> bool {
+    let trimmed = address.trim();
+    let host = if let Some(rest) = trimmed.strip_prefix('[') {
+        // Bracketed IPv6 literal: never a Tailscale IPv4 endpoint.
+        let Some(end) = rest.find(']') else {
+            return false;
+        };
+        &rest[..end]
+    } else if trimmed.bytes().filter(|byte| *byte == b':').count() > 1 {
+        // Unbracketed IPv6 literal: never a Tailscale IPv4 endpoint.
+        return false;
+    } else {
+        trimmed.split(':').next().unwrap_or(trimmed)
+    };
+    let octets: Vec<&str> = host.split('.').collect();
+    let [first, second, ..] = octets.as_slice() else {
+        return false;
+    };
+    let (Ok(first), Ok(second)) = (first.parse::<u8>(), second.parse::<u8>()) else {
+        return false;
+    };
+    if first != 100 || !(64..=127).contains(&second) {
+        return false;
+    }
+    host.split('.').count() == 4 && host.split('.').all(|part| part.parse::<u8>().is_ok())
+}
+
+/// Every endpoint `migrate_server_pin` may move: the legacy K11 literals,
+/// any Tailscale address, plus the configured Oracle endpoint. The Oracle
+/// address is a source (never a compiled default) so both hops — legacy →
+/// Oracle IP, then Oracle IP → a later address if the endpoint ever
+/// changes — migrate with the same idempotent mechanism. Anything else is
+/// a custom endpoint and is preserved untouched (E3).
 pub fn is_migration_source(address: &str) -> bool {
     LEGACY_K11_ENDPOINTS.contains(&address)
+        || is_tailscale_address(address)
         || oracle_endpoint().is_some_and(|oracle| oracle == address)
 }
 
@@ -85,12 +117,12 @@ pub enum PinMigrationError {
     NotConfigured,
 }
 
-/// Migrates an exact legacy K11 endpoint to `to_address`, preserving the
-/// pinned fingerprint.
+/// Migrates a legacy endpoint (K11 literal or Tailscale address) to
+/// `to_address`, preserving the pinned fingerprint.
 ///
 /// - Fingerprint is taken from the stored pin, never from the caller: a
 ///   migration cannot swap trust (cutover keeps `b9846…`).
-/// - Only `LEGACY_K11_ENDPOINTS` exact matches migrate; everything else is
+/// - Only `is_migration_source` matches migrate; everything else is
 ///   returned as `AlreadyMigrated`/`PreservedCustom` with no write.
 /// - The write reuses `store_server_pin` (temp-file + rename, 0600), so a
 ///   crash leaves the old or the new valid JSON, never a partial file (E4).
@@ -126,8 +158,8 @@ pub fn migrate_server_pin(
     })
 }
 
-/// True when the stored pin points at a migratable source (legacy K11 or
-/// Oracle canary): the UI migration banner gate.
+/// True when the stored pin points at a migratable source (legacy K11,
+/// Tailscale, or Oracle canary): the UI migration banner gate.
 pub fn server_pin_needs_migration(directory: &Path) -> bool {
     load_server_pin(directory).is_some_and(|pin| is_migration_source(&pin.address))
 }
@@ -667,7 +699,10 @@ mod tests {
 
     #[test]
     fn migration_env_oracle_is_a_source_for_the_second_hop() {
-        const TEST_ORACLE: &str = "192.0.2.99:9091";
+        // Distinct TEST-NET-1 address: the sibling migration test asserts its
+        // own TEST address is *not* a source, and tests share process env
+        // under parallel execution — sharing the value would race.
+        const TEST_ORACLE: &str = "192.0.2.100:9091";
         struct EnvRestore {
             oracle: Option<String>,
             fallback: Option<String>,
@@ -729,6 +764,42 @@ mod tests {
                 to: "harbor.example.com:9091".to_owned(),
             }
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tailscale_pins_are_migration_sources_for_oracle() {
+        // CGNAT 100.64.0.0/10 with any port: never a product endpoint.
+        assert!(is_tailscale_address("100.64.0.1:9091"));
+        assert!(is_tailscale_address("100.114.220.46:9091"));
+        assert!(is_tailscale_address("100.127.255.255:9091"));
+        assert!(is_migration_source("100.114.220.46:9091"));
+        // Just outside the CGNAT range, or not IPv4: stays custom.
+        assert!(!is_tailscale_address("100.63.255.255:9091"));
+        assert!(!is_tailscale_address("100.128.0.1:9091"));
+        assert!(!is_tailscale_address("137.131.217.214:9091"));
+        assert!(!is_tailscale_address("custom.example.com:9091"));
+        assert!(!is_tailscale_address(
+            "[2804:d59:8777:ad00:3a30:f9ff:fe3e:de81]:9091"
+        ));
+        assert!(!is_migration_source("custom.example.com:9091"));
+
+        // A stored Tailscale pin migrates, preserving the fingerprint.
+        const TEST_ORACLE: &str = "192.0.2.99:9091";
+        let dir = std::env::temp_dir().join(format!("harbor-migrate-tailscale-{}", Uuid::new_v4()));
+        store_server_pin(&dir, &test_pin("100.114.220.46:9091")).unwrap();
+        assert!(server_pin_needs_migration(&dir));
+        let outcome = migrate_server_pin(&dir, TEST_ORACLE).unwrap();
+        assert_eq!(
+            outcome,
+            PinMigration::Migrated {
+                from: "100.114.220.46:9091".to_owned(),
+                to: TEST_ORACLE.to_owned(),
+            }
+        );
+        let pin = load_server_pin(&dir).unwrap();
+        assert_eq!(pin.address, TEST_ORACLE);
+        assert_eq!(pin.fingerprint_hex, "b".repeat(64));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

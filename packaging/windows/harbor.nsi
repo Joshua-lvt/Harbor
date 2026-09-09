@@ -5,10 +5,13 @@
 ;            /DDEPSDIR=dist\win-deps /DOUTFILE=harbor-windows-setup.exe
 ;            packaging\windows\harbor.nsi
 ;
-; What it does, in order: Harbor files, Start Menu entries, the official
-; Microsoft Visual C++ 2022 redistributable (chained, quiet — Qt requires
-; the official package, never side-by-side DLLs), desktop icon (optional),
-; and an uninstaller with Add/Remove Programs registration.
+; What it does, in order: Harbor files, Start Menu entries, Windows
+; Firewall allow rules for every network-facing binary (this is the
+; firewall permission request: the elevated installer registers them, so
+; the unprivileged app never has to), the official Microsoft Visual C++
+; 2022 redistributable (chained, quiet — Qt requires the official
+; package, never side-by-side DLLs), desktop icon (optional), and an
+; uninstaller with Add/Remove Programs registration.
 ;
 ; What it deliberately does NOT do: bundle or install any network client —
 ; Harbor connects over the user's own internet (direct IPv6/IPv4, relay
@@ -123,6 +126,35 @@ Section "Harbor (required)" SectionMain
     "$INSTDIR\harbor.exe" 0
   CreateShortcut "$SMPROGRAMS\Harbor\Uninstall Harbor.lnk" "$PROGRAMFILES64\Harbor Update\uninstall.exe"
 
+  ; Windows Firewall permission: Harbor talks to its server, peers, and
+  ; relays directly (TCP control plane, UDP media/direct, updater
+  ; downloads). Register explicit allow rules for every network-facing
+  ; binary — both directions, so hardened outbound-block policies work
+  ; too. The installer is elevated, which is the only context allowed to
+  ; touch the firewall; the app itself stays unprivileged. Best-effort:
+  ; a disabled firewall service fails these commands and must never
+  ; fail the install, so return codes are intentionally ignored. The
+  ; privileged update broker has no network by design and gets no rule.
+  DetailPrint "Registering Windows Firewall rules..."
+  ; Delete first: reinstalls/upgrades would otherwise stack a duplicate
+  ; set on every run.
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-core.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-core.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-media.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-media.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-update-helper.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-update-helper.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor.exe in)" dir=in action=allow program="$INSTDIR\harbor.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor.exe out)" dir=out action=allow program="$INSTDIR\harbor.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-core.exe in)" dir=in action=allow program="$INSTDIR\harbor-core.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-core.exe out)" dir=out action=allow program="$INSTDIR\harbor-core.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-media.exe in)" dir=in action=allow program="$INSTDIR\harbor-media.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-media.exe out)" dir=out action=allow program="$INSTDIR\harbor-media.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-update-helper.exe in)" dir=in action=allow program="$INSTDIR\harbor-update-helper.exe" enable=yes profile=any protocol=any' $0
+  ExecWait 'netsh advfirewall firewall add rule name="Harbor (harbor-update-helper.exe out)" dir=out action=allow program="$INSTDIR\harbor-update-helper.exe" enable=yes profile=any protocol=any' $0
+
   ; Official VC++ 2022 runtime (Qt requires the redistributable package).
   ; Quiet, idempotent: a present runtime returns success immediately.
   DetailPrint "Installing Microsoft Visual C++ 2022 runtime..."
@@ -145,6 +177,17 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Harbor\Uninstall Harbor.lnk"
   RMDir "$SMPROGRAMS\Harbor"
   Delete "$DESKTOP\Harbor.lnk"
+  ; Remove the firewall rules this installer registered. Best-effort:
+  ; failures (firewall disabled, rules already gone) never fail uninstall.
+  DetailPrint "Removing Windows Firewall rules..."
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-core.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-core.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-media.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-media.exe out)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-update-helper.exe in)"' $0
+  ExecWait 'netsh advfirewall firewall delete rule name="Harbor (harbor-update-helper.exe out)"' $0
   ; Application files only: identity/state in %LOCALAPPDATA% survives so a
   ; reinstall keeps working, and the C++ runtime (shared system component)
   ; is not removed.
